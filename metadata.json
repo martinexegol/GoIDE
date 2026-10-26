@@ -1,0 +1,6 @@
+{
+  "name": "GopherPad - IDE Go Android & Web",
+  "description": "IDE Go moderne avec coloration syntaxique Go 1.23, autocomplétion intelligente par flèches et Enter, indentation, barre tactile mobile et compilateur intégré.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

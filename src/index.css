@@ -1,0 +1,108 @@
+@import "tailwindcss";
+
+@layer utilities {
+  /* Hide scrollbar for Chrome, Safari and Opera */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  /* Hide scrollbar for IE, Edge and Firefox */
+  .no-scrollbar {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+  }
+}
+
+/* Custom scrollbars for code and terminal */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #080d1a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* Keyframe animations for drawers */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideLeft {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes slideRight {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.15s ease-out forwards;
+}
+
+.animate-slide-left {
+  animation: slideLeft 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-slide-right {
+  animation: slideRight 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Android touch feel */
+html, body {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+/* Light Theme CodeMirror Autocomplete Contrast Assurance */
+.cm-theme-light .cm-tooltip-autocomplete,
+[data-theme="light"] .cm-tooltip-autocomplete {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border: 2px solid #0284c7 !important;
+}
+
+.cm-theme-light .cm-completionLabel,
+[data-theme="light"] .cm-completionLabel {
+  color: #0369a1 !important;
+  font-weight: 700 !important;
+}
+
+.cm-theme-light .cm-completionDetail,
+[data-theme="light"] .cm-completionDetail {
+  color: #334155 !important;
+  background-color: #f1f5f9 !important;
+  border: 1px solid #cbd5e1 !important;
+}
+
+.cm-theme-light .cm-completionMatchedText,
+[data-theme="light"] .cm-completionMatchedText {
+  color: #0284c7 !important;
+  font-weight: 800 !important;
+  text-decoration: underline !important;
+}
+
+.cm-theme-light .cm-tooltip-autocomplete ul li[aria-selected],
+[data-theme="light"] .cm-tooltip-autocomplete ul li[aria-selected] {
+  background-color: #0284c7 !important;
+  color: #ffffff !important;
+}
+
+.cm-theme-light .cm-tooltip-autocomplete ul li[aria-selected] .cm-completionLabel,
+.cm-theme-light .cm-tooltip-autocomplete ul li[aria-selected] .cm-completionMatchedText,
+.cm-theme-light .cm-tooltip-autocomplete ul li[aria-selected] .cm-completionDetail {
+  color: #ffffff !important;
+}
+
