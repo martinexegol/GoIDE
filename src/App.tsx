@@ -10,8 +10,9 @@ import { OfflineIndicator } from './components/OfflineIndicator';
 import { runGoCode, parseGoErrors } from './services/goRunner';
 import { formatGoCode } from './services/goFormatter';
 import { analyzeGoCode, GoDiagnostic } from './services/goAnalyzer';
-import { GoFile, CompileResult, ParsedError, GoLesson, LearnedRule } from './types';
+import { GoFile, CompileResult, ParsedError, GoLesson, LearnedRule, WorkspaceSnapshot } from './types';
 import { ThemeId, AVAILABLE_THEMES } from './theme/goThemes';
+import { STANDARD_GO_PROJECT_FILES, normalizePath } from './utils/fileTree';
 
 const STORAGE_KEY_FILES = 'gopherpad_files_v1';
 const STORAGE_KEY_ACTIVE = 'gopherpad_active_file_v1';
@@ -19,6 +20,8 @@ const STORAGE_KEY_FONT = 'gopherpad_font_size_v1';
 const STORAGE_KEY_THEME = 'gopherpad_theme_v1';
 const STORAGE_KEY_TERM_HEIGHT = 'gopherpad_terminal_height_v1';
 const STORAGE_KEY_LEARNED_RULES = 'gopherpad_learned_rules_v1';
+const STORAGE_KEY_SNAPSHOTS = 'gopherpad_snapshots_5min_v1';
+const AUTO_SNAPSHOT_INTERVAL_SEC = 5 * 60; // 5 minutes (300 secondes)
 
 const INITIAL_CODE = `package main
 
@@ -162,6 +165,33 @@ export default function App() {
     return [];
   });
 
+  // 5-minute Auto-Save Snapshots
+  const [snapshots, setSnapshots] = useState<WorkspaceSnapshot[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_SNAPSHOTS);
+      if (saved) return JSON.parse(saved);
+    } catch {
+      // ignore
+    }
+    return [];
+  });
+
+  const [nextSnapshotSec, setNextSnapshotSec] = useState<number>(AUTO_SNAPSHOT_INTERVAL_SEC);
+  const [lastAutoSnapshotTime, setLastAutoSnapshotTime] = useState<Date | null>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_SNAPSHOTS);
+      if (saved) {
+        const parsed: WorkspaceSnapshot[] = JSON.parse(saved);
+        if (parsed.length > 0) return new Date(parsed[0].timestamp);
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  });
+
+  const lastSnapshotContentRef = useRef<string>('');
+
   // Ref to editor handle
   const editorRef = useRef<EditorHandle>(null);
 
@@ -304,6 +334,62 @@ export default function App() {
     }
   }, [files, activeFileId]);
 
+  // 5-minute Auto-save snapshot generator
+  const triggerSnapshot = useCallback(
+    (label: string = 'Sauvegarde auto (5 min)') => {
+      const totalLines = files.reduce(
+        (acc, f) => acc + (f.content.split('\n').length || 1),
+        0
+      );
+      const newSnapshot: WorkspaceSnapshot = {
+        id: `snapshot-${Date.now()}`,
+        timestamp: Date.now(),
+        files: files.map((f) => ({ ...f })),
+        activeFileId,
+        label,
+        totalLines,
+      };
+
+      setSnapshots((prev) => {
+        const updated = [newSnapshot, ...prev].slice(0, 20); // Keep last 20 snapshots
+        try {
+          localStorage.setItem(STORAGE_KEY_SNAPSHOTS, JSON.stringify(updated));
+        } catch (err) {
+          console.warn('Failed to save snapshot:', err);
+        }
+        return updated;
+      });
+
+      setLastAutoSnapshotTime(new Date());
+      setNextSnapshotSec(AUTO_SNAPSHOT_INTERVAL_SEC);
+      lastSnapshotContentRef.current = JSON.stringify(
+        files.map((f) => ({ id: f.id, content: f.content }))
+      );
+    },
+    [files, activeFileId]
+  );
+
+  // Periodic 5-minute Auto-save timer with countdown
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNextSnapshotSec((prev) => {
+        if (prev <= 1) {
+          // Check if file content changed before auto-snapshotting
+          const currentContentStr = JSON.stringify(
+            files.map((f) => ({ id: f.id, content: f.content }))
+          );
+          if (currentContentStr !== lastSnapshotContentRef.current) {
+            triggerSnapshot('Sauvegarde auto (5 min)');
+          }
+          return AUTO_SNAPSHOT_INTERVAL_SEC;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [files, triggerSnapshot]);
+
   // Code change handler
   const handleCodeChange = useCallback((newContent: string) => {
     setFiles((prev) =>
@@ -369,6 +455,7 @@ export default function App() {
   }, []);
 
   // Lines concerned by errors (shows a clean red dot on the line in the editor gutter)
+  const prevErrorLinesRef = useRef<number[]>([]);
   const errorLines = useMemo(() => {
     const lines = new Set<number>();
     if (compileResult && !compileResult.success && parsedErrors.length > 0) {
@@ -384,7 +471,13 @@ export default function App() {
         }
       }
     }
-    return Array.from(lines);
+    const arr = Array.from(lines).sort((a, b) => a - b);
+    const prev = prevErrorLinesRef.current;
+    if (prev.length === arr.length && prev.every((v, i) => v === arr[i])) {
+      return prev;
+    }
+    prevErrorLinesRef.current = arr;
+    return arr;
   }, [compileResult, parsedErrors, diagnostics]);
 
   // Clear terminal
@@ -429,18 +522,59 @@ export default function App() {
     }, 200);
   }, [handleRun]);
 
-  // Create file (with optional template content)
+  // Create file (with optional template content and automatic package resolution)
   const handleCreateFile = useCallback((name: string, templateContent?: string) => {
+    const cleanName = normalizePath(name);
+    const segments = cleanName.split('/');
+    const defaultPackage = segments.length > 1 ? segments[segments.length - 2] : 'main';
+
+    const defaultContent =
+      defaultPackage === 'main'
+        ? `package main\n\nimport (\n\t"fmt"\n)\n\nfunc main() {\n\tfmt.Println("Fichier ${cleanName} prêt !")\n}\n`
+        : `package ${defaultPackage}\n\n// Package ${defaultPackage}\n`;
+
     const newFile: GoFile = {
       id: `file-${Date.now()}`,
-      name,
-      content:
-        templateContent ||
-        `package main\n\nimport (\n\t"fmt"\n)\n\nfunc main() {\n\tfmt.Println("Fichier ${name} prêt !")\n}\n`,
+      name: cleanName,
+      content: templateContent || defaultContent,
     };
     setFiles((prev) => [...prev, newFile]);
     setActiveFileId(newFile.id);
   }, []);
+
+  // Restore a 5-minute snapshot
+  const handleRestoreSnapshot = useCallback((snapshot: WorkspaceSnapshot) => {
+    if (snapshot.files && snapshot.files.length > 0) {
+      setFiles(snapshot.files);
+      if (snapshot.activeFileId && snapshot.files.some((f) => f.id === snapshot.activeFileId)) {
+        setActiveFileId(snapshot.activeFileId);
+      } else {
+        setActiveFileId(snapshot.files[0].id);
+      }
+      setLastSavedAt(new Date());
+    }
+  }, []);
+
+  // Delete a snapshot
+  const handleDeleteSnapshot = useCallback((snapshotId: string) => {
+    setSnapshots((prev) => {
+      const filtered = prev.filter((s) => s.id !== snapshotId);
+      try {
+        localStorage.setItem(STORAGE_KEY_SNAPSHOTS, JSON.stringify(filtered));
+      } catch (err) {
+        console.warn('Failed to persist snapshots after deletion:', err);
+      }
+      return filtered;
+    });
+  }, []);
+
+  // Initialize standard Go project structure (cmd/server/, pkg/math/, internal/config/)
+  const handleInitStandardProject = useCallback(() => {
+    setFiles(STANDARD_GO_PROJECT_FILES);
+    setActiveFileId(STANDARD_GO_PROJECT_FILES[0].id);
+    setLastSavedAt(new Date());
+    triggerSnapshot('Initialisation projet standard (cmd/, pkg/, internal/)');
+  }, [triggerSnapshot]);
 
   // Rename file
   const handleRenameFile = useCallback((fileId: string, newName: string) => {
@@ -611,6 +745,8 @@ export default function App() {
         onSelectTheme={setThemeId}
         onSave={handleSaveWorkspace}
         lastSavedAt={lastSavedAt}
+        nextSnapshotSec={nextSnapshotSec}
+        snapshotsCount={snapshots.length}
       />
 
       {/* Main Workspace: Editor, Diagnostics, Accessory Bar and Resizable Terminal */}
@@ -732,6 +868,13 @@ export default function App() {
         onSaveWorkspace={handleSaveWorkspace}
         onResetWorkspace={handleResetWorkspace}
         lastSavedAt={lastSavedAt}
+        snapshots={snapshots}
+        lastAutoSnapshotTime={lastAutoSnapshotTime}
+        nextSnapshotSec={nextSnapshotSec}
+        onRestoreSnapshot={handleRestoreSnapshot}
+        onDeleteSnapshot={handleDeleteSnapshot}
+        onCreateSnapshotNow={triggerSnapshot}
+        onInitStandardProject={handleInitStandardProject}
       />
 
       {/* Offline Status Toast */}

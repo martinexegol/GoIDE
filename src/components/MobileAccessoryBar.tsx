@@ -11,6 +11,7 @@ export const MobileAccessoryBar: React.FC<MobileAccessoryBarProps> = ({
 }) => {
   const quickKeys = [
     { label: 'Tab', value: '\t', icon: ArrowRightToLine, highlight: true },
+    { label: 'package main', value: 'package main', highlight: true },
     { label: ':=', value: ' := ', highlight: true },
     { label: 'var', value: 'var ', highlight: true },
     { label: '<-', value: ' <- ', highlight: true },

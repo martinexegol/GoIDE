@@ -34,6 +34,8 @@ interface HeaderProps {
   onSelectTheme: (themeId: ThemeId) => void;
   onSave: () => void;
   lastSavedAt: Date | null;
+  nextSnapshotSec?: number;
+  snapshotsCount?: number;
 }
 
 type ThemeCategoryFilter = 'Tous' | 'Clair' | 'Rétro' | 'Foncé' | 'Néon';
@@ -56,6 +58,8 @@ export const Header: React.FC<HeaderProps> = ({
   onSelectTheme,
   onSave,
   lastSavedAt,
+  nextSnapshotSec,
+  snapshotsCount = 0,
 }) => {
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const [themeFilter, setThemeFilter] = useState<ThemeCategoryFilter>('Tous');
@@ -196,6 +200,9 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="flex items-center gap-1 shrink-0">
             {files.map((file) => {
               const isActive = file.id === activeFileId;
+              const lastSlash = file.name.lastIndexOf('/');
+              const folderPrefix = lastSlash > -1 ? file.name.slice(0, lastSlash + 1) : '';
+              const baseName = lastSlash > -1 ? file.name.slice(lastSlash + 1) : file.name;
 
               if (isWin98) {
                 return (
@@ -209,7 +216,10 @@ export const Header: React.FC<HeaderProps> = ({
                     }`}
                   >
                     <span className="w-1.5 h-1.5 bg-[#000080]" />
-                    <span>{file.name}</span>
+                    <span className="truncate max-w-[130px]">
+                      {folderPrefix && <span className="opacity-60 text-[10px]">{folderPrefix}</span>}
+                      <span>{baseName}</span>
+                    </span>
                   </button>
                 );
               }
@@ -229,10 +239,13 @@ export const Header: React.FC<HeaderProps> = ({
                   }`}
                 >
                   <span
-                    className="w-1.5 h-1.5 rounded-full"
+                    className="w-1.5 h-1.5 rounded-full shrink-0"
                     style={{ backgroundColor: activeThemeConfig.accentHex }}
                   />
-                  <span>{file.name}</span>
+                  <span className="truncate max-w-[140px]">
+                    {folderPrefix && <span className="opacity-50 text-[10px]">{folderPrefix}</span>}
+                    <span>{baseName}</span>
+                  </span>
                 </button>
               );
             })}
@@ -241,15 +254,19 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Right: Actions */}
         <div className="flex items-center gap-1.5 shrink-0 ml-2">
-          {/* Quick Save button */}
+          {/* Quick Save button with 5-minute Auto-save indicator */}
           <button
             onClick={handleSaveClick}
             className={
               isWin98
                 ? win98BtnBase
-                : `flex items-center gap-1 px-2.5 py-1 rounded-lg border text-xs font-medium transition active:scale-95 shrink-0 ${modernBtnClass}`
+                : `flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-medium transition active:scale-95 shrink-0 ${modernBtnClass}`
             }
-            title="Enregistrer le code dans le navigateur (Ctrl+S)"
+            title={
+              nextSnapshotSec !== undefined
+                ? `Sauvegarde manuelle (Ctrl+S) • Prochaine sauvegarde auto dans ${Math.floor(nextSnapshotSec / 60)}m ${nextSnapshotSec % 60}s`
+                : 'Enregistrer le code dans le navigateur (Ctrl+S)'
+            }
           >
             {savedNotice ? (
               <>
@@ -262,6 +279,10 @@ export const Header: React.FC<HeaderProps> = ({
               <>
                 <Save className={`w-3.5 h-3.5 ${isWin98 ? 'text-[#000080]' : 'text-sky-500'}`} />
                 <span className="hidden sm:inline">Sauvegarder</span>
+                <span
+                  className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse ml-0.5"
+                  title="Sauvegarde automatique toutes les 5 min active"
+                />
               </>
             )}
           </button>

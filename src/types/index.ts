@@ -60,3 +60,20 @@ export interface LearnedRule {
   ruleId: string;
 }
 
+export interface WorkspaceSnapshot {
+  id: string;
+  timestamp: number;
+  files: GoFile[];
+  activeFileId: string;
+  label?: string;
+  totalLines?: number;
+}
+
+export interface FileTreeNode {
+  name: string;
+  path: string;
+  isFolder: boolean;
+  file?: GoFile;
+  children: FileTreeNode[];
+}
+

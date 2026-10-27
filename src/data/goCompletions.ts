@@ -12,7 +12,8 @@ export interface GoSnippetDef {
 }
 
 export const GO_KEYWORDS: GoSnippetDef[] = [
-  { label: 'package', detail: 'keyword', info: 'Déclare le package du fichier Go (ex: package main)', type: 'keyword', template: 'package ${1:main}\n\n' },
+  { label: 'package main', detail: 'point d\'entrée principal', info: 'Déclare le package "main", requis pour tout exécutable Go. Valide automatiquement sur Entrée.', type: 'keyword', template: 'package main\n\n', boost: 60, keywords: ['package', 'package main', 'main'] },
+  { label: 'package', detail: 'keyword', info: 'Déclare le package du fichier Go (ex: package main)', type: 'keyword', template: 'package main\n\n', boost: 55, keywords: ['package', 'main'] },
   { label: 'import', detail: 'keyword', info: 'Importe des packages de la bibliothèque standard ou externes', type: 'keyword', template: 'import (\n\t"${1:fmt}"\n)\n' },
   { label: 'func main()', detail: 'point d\'entrée principal', info: 'Déclare la fonction principale main() sans argument ni retour, point d\'entrée universel en Go', type: 'function', template: 'func main() {\n\t${0}\n}', boost: 25, keywords: ['func', 'main', 'principale'] },
   { label: 'main', detail: 'func main() { ... }', info: 'Génère la fonction principale main() sans argument ni retour.', type: 'function', template: 'func main() {\n\t${0}\n}', boost: 24, keywords: ['func', 'main'] },
@@ -323,7 +324,7 @@ Exemple : log.Fatalf("Impossible d'écouter sur le port %d: %v", port, err)`,
   // 16. slog.Info
   {
     label: 'slog.Info',
-    detail: 'log structuré moderne Go 1.21+ [INFO]',
+    detail: 'log structuré moderne Go 1.21+ (niveau INFO)',
     info: `slog.Info(msg string, args ...any)
 Journalisation structurée moderne (Go 1.21+ package log/slog) avec attributs clé/valeur au niveau INFO.
 Produit des logs structurés (JSON ou texte lisible) faciles à indexer.
@@ -337,7 +338,7 @@ Exemple : slog.Info("Requête terminée", "statut", 200, "duree_ms", 15)`,
   // 17. slog.Error
   {
     label: 'slog.Error',
-    detail: 'log structuré moderne Go 1.21+ [ERROR]',
+    detail: 'log structuré moderne Go 1.21+ (niveau ERROR)',
     info: `slog.Error(msg string, args ...any)
 Journalisation structurée au niveau ERROR avec clé d'erreur explicite.
 Exemple : slog.Error("Échec de connexion", "err", err, "tentatives", 3)`,
@@ -905,7 +906,7 @@ export function buildCompletionsList(): Completion[] {
       detail: item.detail,
       info: item.info,
       type: item.type,
-      boost: 8,
+      boost: item.boost ?? 25,
       apply: item.template ? snippet(item.template) : item.label,
     });
   }
@@ -919,7 +920,7 @@ export function buildCompletionsList(): Completion[] {
 export const VAR_TYPE_COMPLETIONS: GoSnippetDef[] = [
   {
     label: 'string',
-    detail: 'var [nom] string',
+    detail: 'var nom string',
     info: `Type : string (Chaîne de caractères UTF-8)
 Valeur zéro par défaut : ""
 Exemple : var nom string = "Alice"`,
@@ -930,9 +931,10 @@ Exemple : var nom string = "Alice"`,
   },
   {
     label: 'int',
-    detail: 'var [nom] int',
+    detail: 'var nom int (entier unique)',
     info: `Type : int (Entier signé standard 32 ou 64 bits)
 Valeur zéro par défaut : 0
+Stocke un SEUL nombre entier (sans crochets []).
 Exemple : var age int = 25`,
     type: 'type',
     template: '${1:nom} int',
@@ -941,7 +943,7 @@ Exemple : var age int = 25`,
   },
   {
     label: 'bool',
-    detail: 'var [nom] bool',
+    detail: 'var nom bool',
     info: `Type : bool (Booléen true ou false)
 Valeur zéro par défaut : false
 Exemple : var estActif bool = true`,
@@ -952,8 +954,8 @@ Exemple : var estActif bool = true`,
   },
   {
     label: 'float64',
-    detail: 'var [nom] float64',
-    info: `Type : float64 (Nombre flottant double précision)
+    detail: 'var nom float64',
+    info: `Type : float64 (Nombre flottant décimal)
 Valeur zéro par défaut : 0.0
 Exemple : var prix float64 = 19.99`,
     type: 'type',
@@ -963,7 +965,7 @@ Exemple : var prix float64 = 19.99`,
   },
   {
     label: 'any',
-    detail: 'var [nom] any',
+    detail: 'var nom any',
     info: `Type : any (Accepte n'importe quelle valeur - Go 1.18+)
 Valeur zéro par défaut : nil
 Exemple : var donnees any = 42`,
@@ -974,7 +976,7 @@ Exemple : var donnees any = 42`,
   },
   {
     label: 'error',
-    detail: 'var [nom] error',
+    detail: 'var err error',
     info: `Type : error (Interface standard d'erreur en Go)
 Valeur zéro par défaut : nil
 Exemple : var err error`,
@@ -985,10 +987,11 @@ Exemple : var err error`,
   },
   {
     label: '[]string',
-    detail: 'var [nom] []string',
-    info: `Type : []string (Slice dynamique de chaînes)
-Valeur zéro par défaut : nil (longueur 0)
-Exemple : var prenoms []string`,
+    detail: 'var liste []string (slice/liste)',
+    info: `Type : []string (Slice / tableau dynamique de chaînes)
+Les crochets [] indiquent une LISTE de plusieurs chaînes.
+Pour une seule chaîne, utilisez 'string' sans crochets.
+Exemple : var prenoms []string = []string{"Alice", "Bob"}`,
     type: 'type',
     template: '${1:liste} []string',
     boost: 24,
@@ -996,10 +999,11 @@ Exemple : var prenoms []string`,
   },
   {
     label: '[]int',
-    detail: 'var [nom] []int',
-    info: `Type : []int (Slice dynamique d'entiers)
-Valeur zéro par défaut : nil
-Exemple : var nombres []int`,
+    detail: 'var nombres []int (slice/liste d\'entiers)',
+    info: `Type : []int (Slice / liste dynamique de plusieurs entiers)
+Les crochets [] indiquent une LISTE d'entiers (ex: [1, 2, 3]).
+Pour une variable contenant un SEUL entier, choisissez 'int' (sans crochets []).
+Exemple : var nombres []int = []int{10, 20, 30}`,
     type: 'type',
     template: '${1:nombres} []int',
     boost: 23,
@@ -1007,9 +1011,8 @@ Exemple : var nombres []int`,
   },
   {
     label: 'map[string]any',
-    detail: 'var [nom] map[string]any',
-    info: `Type : map[string]any (Table de hachage associative)
-Valeur zéro : nil. Doit être initialisée avec make(map[string]any) pour écrire.
+    detail: 'var config map[string]any',
+    info: `Type : map[string]any (Table de hachage associative clé/valeur)
 Exemple : var config map[string]any`,
     type: 'type',
     template: '${1:config} map[string]any',
@@ -1018,9 +1021,8 @@ Exemple : var config map[string]any`,
   },
   {
     label: 'int64',
-    detail: 'var [nom] int64',
-    info: `Type : int64 (Entier 64 bits de -9223372036854775808 à 9223372036854775807)
-Valeur zéro : 0`,
+    detail: 'var id int64',
+    info: `Type : int64 (Entier grand format 64 bits)`,
     type: 'type',
     template: '${1:id} int64',
     boost: 21,
@@ -1028,9 +1030,8 @@ Valeur zéro : 0`,
   },
   {
     label: 'byte',
-    detail: 'var [nom] byte',
-    info: `Type : byte (Alias uint8 représentant 1 octet)
-Valeur zéro : 0`,
+    detail: 'var b byte',
+    info: `Type : byte (Octet uint8 brut)`,
     type: 'type',
     template: '${1:b} byte',
     boost: 20,
@@ -1038,9 +1039,8 @@ Valeur zéro : 0`,
   },
   {
     label: 'time.Time',
-    detail: 'var [nom] time.Time',
-    info: `Type : time.Time (Instant temporel précis du package standard time)
-Valeur zéro : 0001-01-01 00:00:00 UTC`,
+    detail: 'var date time.Time',
+    info: `Type : time.Time (Date et heure)`,
     type: 'type',
     template: '${1:date} time.Time',
     boost: 20,
@@ -1049,9 +1049,8 @@ Valeur zéro : 0001-01-01 00:00:00 UTC`,
   },
   {
     label: 'sync.WaitGroup',
-    detail: 'var [nom] sync.WaitGroup',
-    info: `Type : sync.WaitGroup (Compteur de synchronisation de goroutines)
-Exemple : var wg sync.WaitGroup`,
+    detail: 'var wg sync.WaitGroup',
+    info: `Type : sync.WaitGroup (Synchronisation goroutines)`,
     type: 'type',
     template: '${1:wg} sync.WaitGroup',
     boost: 19,
@@ -1060,9 +1059,8 @@ Exemple : var wg sync.WaitGroup`,
   },
   {
     label: 'struct',
-    detail: 'var [nom] struct { ... }',
-    info: `Type : Structure anonyme personnalisée
-Exemple : var point struct { X, Y int }`,
+    detail: 'var donnee struct { ... }',
+    info: `Type : Structure personnalisée`,
     type: 'class',
     template: '${1:donnee} struct {\\n\\t${2:Champ} ${3:string}\\n}',
     boost: 18,
@@ -1075,94 +1073,112 @@ Exemple : var point struct { X, Y int }`,
  */
 export const VAR_DECLARATIONS: GoSnippetDef[] = [
   {
-    label: 'var : string',
-    detail: 'var [nom] string',
-    info: 'Déclare une variable de type string. Le curseur est positionné sur le nom pour le saisir immédiatement.',
+    label: 'var name int',
+    detail: 'var name int (entier unique - sans crochets)',
+    info: 'Déclare un SEUL nombre entier : var name int\nExemple : var age int = 25\nPas de crochets [] pour un entier scalaire.',
     type: 'keyword',
-    template: 'var ${1:nom} string',
-    boost: 28,
-    keywords: ['var', 'string', 'variable'],
+    template: 'var ${1:name} int',
+    boost: 40,
+    keywords: ['var', 'var name int', 'var int', 'int', 'entier', 'name', 'nom', 'variable'],
   },
   {
-    label: 'var : int',
-    detail: 'var [nom] int',
-    info: 'Déclare une variable de type entier int. Le curseur est positionné sur le nom pour le saisir immédiatement.',
+    label: 'var nom int',
+    detail: 'var nom int (entier unique - sans crochets)',
+    info: 'Déclare un SEUL nombre entier : var nom int\nExemple : var age int = 25',
     type: 'keyword',
     template: 'var ${1:nom} int',
-    boost: 27,
-    keywords: ['var', 'int', 'entier', 'variable'],
+    boost: 39,
+    keywords: ['var', 'var nom int', 'var int', 'int', 'entier', 'nom', 'variable'],
   },
   {
-    label: 'var : bool',
-    detail: 'var [nom] bool',
-    info: 'Déclare une variable booléenne bool. Le curseur est positionné sur le nom.',
+    label: 'var name string',
+    detail: 'var name string (texte - sans crochets)',
+    info: 'Déclare une variable texte (string) : var name string\nExemple : var prenom string = "Alice"',
     type: 'keyword',
-    template: 'var ${1:nom} bool',
-    boost: 26,
-    keywords: ['var', 'bool', 'variable'],
+    template: 'var ${1:name} string',
+    boost: 38,
+    keywords: ['var', 'var name string', 'var string', 'string', 'texte', 'chaine', 'name', 'nom', 'variable'],
   },
   {
-    label: 'var : float64',
-    detail: 'var [nom] float64',
-    info: 'Déclare une variable flottante float64. Le curseur est positionné sur le nom.',
+    label: 'var name bool',
+    detail: 'var name bool (booléen true/false - sans crochets)',
+    info: 'Déclare une variable booléenne : var name bool\nExemple : var estActif bool = true',
     type: 'keyword',
-    template: 'var ${1:nom} float64',
-    boost: 25,
-    keywords: ['var', 'float', 'variable'],
+    template: 'var ${1:name} bool',
+    boost: 37,
+    keywords: ['var', 'var name bool', 'var bool', 'bool', 'booleen', 'name', 'nom', 'variable'],
   },
   {
-    label: 'var : any',
-    detail: 'var [nom] any',
-    info: 'Déclare une variable universelle any (Go 1.18+). Le curseur est positionné sur le nom.',
+    label: 'var name float64',
+    detail: 'var name float64 (flottant 64 bits - sans crochets)',
+    info: 'Déclare un nombre à virgule : var name float64\nExemple : var prix float64 = 19.99',
     type: 'keyword',
-    template: 'var ${1:nom} any',
-    boost: 24,
-    keywords: ['var', 'any', 'variable'],
+    template: 'var ${1:name} float64',
+    boost: 36,
+    keywords: ['var', 'var name float64', 'var float', 'float64', 'decimal', 'flottant', 'name', 'variable'],
   },
   {
-    label: 'var : error',
-    detail: 'var [nom] error',
-    info: 'Déclare une variable d\'erreur error. Le curseur est positionné sur le nom.',
+    label: 'var name any',
+    detail: 'var name any (type universel - sans crochets)',
+    info: 'Déclare une variable pouvant contenir n\'importe quel type (Go 1.18+).',
+    type: 'keyword',
+    template: 'var ${1:name} any',
+    boost: 35,
+    keywords: ['var', 'var name any', 'var any', 'any', 'variable'],
+  },
+  {
+    label: 'var err error',
+    detail: 'var err error (erreur standard - sans crochets)',
+    info: 'Déclare une variable d\'erreur standard : var err error',
     type: 'keyword',
     template: 'var ${1:err} error',
-    boost: 24,
-    keywords: ['var', 'error', 'variable'],
+    boost: 35,
+    keywords: ['var', 'var err error', 'var error', 'error', 'erreur', 'err'],
   },
   {
-    label: 'var : []string',
-    detail: 'var [nom] []string',
-    info: 'Déclare un slice de chaînes []string. Le curseur est positionné sur le nom.',
+    label: 'var name []int',
+    detail: 'var name []int (slice/liste d\'entiers - crochets [])',
+    info: 'Les crochets [] indiquent une LISTE de plusieurs entiers (ex: []int{10, 20, 30}).\nPour un seul entier simple, utilisez "var name int" (sans crochets []).',
     type: 'keyword',
-    template: 'var ${1:liste} []string',
-    boost: 23,
-    keywords: ['var', 'slice', 'string', 'variable'],
+    template: 'var ${1:name} []int',
+    boost: 30,
+    keywords: ['var', 'var name []int', 'var []int', 'slice', 'liste', 'tableau', 'int', 'variable'],
   },
   {
-    label: 'var : []int',
-    detail: 'var [nom] []int',
-    info: 'Déclare un slice d\'entiers []int. Le curseur est positionné sur le nom.',
+    label: 'var name []string',
+    detail: 'var name []string (slice/liste de chaînes - crochets [])',
+    info: 'Les crochets [] indiquent une LISTE de chaînes de texte.\nPour un texte simple, utilisez "var name string" (sans crochets []).',
     type: 'keyword',
-    template: 'var ${1:nombres} []int',
-    boost: 22,
-    keywords: ['var', 'slice', 'int', 'variable'],
+    template: 'var ${1:name} []string',
+    boost: 29,
+    keywords: ['var', 'var name []string', 'var []string', 'slice', 'liste', 'tableau', 'string', 'variable'],
   },
   {
-    label: 'var : map',
-    detail: 'var [nom] map[string]any',
-    info: 'Déclare une map associative. Le curseur est positionné sur le nom.',
+    label: 'var name []byte',
+    detail: 'var name []byte (slice d\'octets - crochets [])',
+    info: 'Les crochets [] indiquent une suite d\'octets bruts ([]byte).',
+    type: 'keyword',
+    template: 'var ${1:name} []byte',
+    boost: 28,
+    keywords: ['var', 'var name []byte', 'slice', 'byte', 'octets', 'variable'],
+  },
+  {
+    label: 'var name map',
+    detail: 'var name map[string]any (dictionnaire)',
+    info: 'Déclare une table de hachage clé/valeur associative (map).',
     type: 'keyword',
     template: 'var ${1:config} map[${2:string}]${3:any}',
-    boost: 21,
-    keywords: ['var', 'map', 'variable'],
+    boost: 27,
+    keywords: ['var', 'map', 'dictionnaire', 'table', 'variable'],
   },
   {
-    label: 'var : block (...)',
-    detail: 'var ( a string; b int )',
-    info: 'Bloc de déclarations de multiples variables.',
+    label: 'var ( ... )',
+    detail: 'var ( a string; b int ) (bloc multiple)',
+    info: 'Bloc de déclarations pour déclarer plusieurs variables groupées.',
     type: 'keyword',
-    template: 'var (\n\t${1:nom} ${2:string}\n\t${3:age} ${4:int}\n)',
-    boost: 20,
-    keywords: ['var', 'bloc', 'multiple'],
+    template: 'var (\n\t${1:name} ${2:string}\n\t${3:age} ${4:int}\n)',
+    boost: 26,
+    keywords: ['var', 'bloc', 'multiple', 'groupe'],
   },
 ];
 

@@ -20,7 +20,7 @@ import {
   snippet,
 } from '@codemirror/autocomplete';
 import { keymap, EditorView, gutter, GutterMarker } from '@codemirror/view';
-import { Prec, Extension } from '@codemirror/state';
+import { Prec, Extension, StateEffect, StateField } from '@codemirror/state';
 import { indentationMarkers } from '@replit/codemirror-indentation-markers';
 import {
   buildCompletionsList,
@@ -30,6 +30,34 @@ import {
 } from '../data/goCompletions';
 import { ThemeId, getThemeExtension, AVAILABLE_THEMES } from '../theme/goThemes';
 import { ParsedError } from '../types';
+
+const DEFAULT_BASIC_SETUP = {
+  lineNumbers: true,
+  highlightActiveLineGutter: true,
+  highlightSpecialChars: true,
+  history: true,
+  foldGutter: true,
+  drawSelection: true,
+  dropCursor: true,
+  allowMultipleSelections: true,
+  indentOnInput: true,
+  syntaxHighlighting: false,
+  bracketMatching: true,
+  closeBrackets: true,
+  autocompletion: false,
+  rectangularSelection: true,
+  crosshairCursor: true,
+  highlightActiveLine: true,
+  highlightSelectionMatches: true,
+  closeBracketsKeymap: true,
+  defaultKeymap: true,
+  searchKeymap: true,
+  historyKeymap: true,
+  foldKeymap: true,
+  completionKeymap: false,
+  lintKeymap: false,
+  tabSize: 4,
+};
 
 /**
  * Gutter marker displaying a clean, elegant red dot on lines with errors
@@ -44,17 +72,39 @@ class ErrorDotMarker extends GutterMarker {
 }
 const errorDotMarker = new ErrorDotMarker();
 
-function createErrorGutter(lines: number[]) {
-  const lineSet = new Set(lines.filter((l) => l > 0));
-  return gutter({
-    class: 'cm-error-gutter',
-    lineMarker(view, line) {
-      const lineObj = view.state.doc.lineAt(line.from);
-      return lineSet.has(lineObj.number) ? errorDotMarker : null;
-    },
-    lineMarkerChange: (update) => update.docChanged,
-  });
-}
+export const setErrorLinesEffect = StateEffect.define<number[]>();
+
+export const errorLinesField = StateField.define<Set<number>>({
+  create() {
+    return new Set<number>();
+  },
+  update(lines, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setErrorLinesEffect)) {
+        return new Set<number>(effect.value.filter((l) => l > 0));
+      }
+    }
+    return lines;
+  },
+});
+
+const errorDotGutter = gutter({
+  class: 'cm-error-gutter',
+  lineMarker(view, line) {
+    const lines = view.state.field(errorLinesField, false);
+    if (!lines) return null;
+    const lineObj = view.state.doc.lineAt(line.from);
+    return lines.has(lineObj.number) ? errorDotMarker : null;
+  },
+  lineMarkerChange(update) {
+    return (
+      update.docChanged ||
+      update.transactions.some((tr) =>
+        tr.effects.some((e) => e.is(setErrorLinesEffect))
+      )
+    );
+  },
+});
 
 export interface EditorHandle {
   insertSnippet: (text: string) => void;
@@ -131,7 +181,7 @@ function insertImportIfNeeded(view: EditorView, pkgName: string) {
   });
 }
 
-export const Editor = forwardRef<EditorHandle, EditorProps>(({
+export const Editor = React.memo(forwardRef<EditorHandle, EditorProps>(({
   value,
   onChange,
   onRun,
@@ -203,8 +253,10 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
 
       try {
         const line = view.state.doc.line(Math.min(lineNumber, view.state.doc.lines));
+        const firstNonWs = line.text.search(/\S/);
+        const targetPos = firstNonWs >= 0 ? line.from + firstNonWs : line.to;
         view.dispatch({
-          selection: { anchor: line.from },
+          selection: { anchor: targetPos },
           scrollIntoView: true,
         });
         view.focus();
@@ -235,24 +287,28 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
     },
   }));
 
-  // Jump to error line when highlightedError changes
+  const onRunRef = useRef(onRun);
+  onRunRef.current = onRun;
+
+  // Update error line markers via StateEffect without reconfiguring extensions
+  const errorLinesKey = errorLines.join(',');
   useEffect(() => {
-    if (highlightedError && highlightedError.line) {
-      const view = cmRef.current?.view;
-      if (view) {
-        try {
-          const lineNum = Math.min(highlightedError.line, view.state.doc.lines);
-          const line = view.state.doc.line(lineNum);
-          view.dispatch({
-            selection: { anchor: line.from },
-            scrollIntoView: true,
-          });
-        } catch {
-          // line out of bounds
-        }
+    const view = cmRef.current?.view;
+    if (view) {
+      const currentLines = view.state.field(errorLinesField, false);
+      const newSet = new Set(errorLines.filter((l) => l > 0));
+      const isSame =
+        currentLines &&
+        currentLines.size === newSet.size &&
+        Array.from(newSet).every((l) => currentLines.has(l));
+
+      if (!isSame) {
+        view.dispatch({
+          effects: setErrorLinesEffect.of(errorLines),
+        });
       }
     }
-  }, [highlightedError]);
+  }, [errorLinesKey, errorLines]);
 
   // Completions list
   const completions = useMemo(() => buildCompletionsList(), []);
@@ -293,12 +349,109 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
         };
       }
 
+      // Var snippet immediately after "var "
+      if (/\bvar\s+$/.test(textBefore)) {
+        return {
+          from: pos,
+          options: [
+            {
+              label: 'name int',
+              detail: 'entier unique (sans crochets)',
+              info: 'Déclare un SEUL nombre entier : var name int (sans crochets []).\nExemple : var age int = 25',
+              type: 'keyword',
+              boost: 50,
+              apply: snippet('${1:name} int'),
+            },
+            {
+              label: 'nom int',
+              detail: 'entier unique (sans crochets)',
+              info: 'Déclare un SEUL nombre entier : var nom int (sans crochets []).\nExemple : var age int = 25',
+              type: 'keyword',
+              boost: 49,
+              apply: snippet('${1:nom} int'),
+            },
+            {
+              label: 'name string',
+              detail: 'texte (sans crochets)',
+              info: 'Déclare une variable texte : var name string\nExemple : var prenom string = "Alice"',
+              type: 'keyword',
+              boost: 48,
+              apply: snippet('${1:name} string'),
+            },
+            {
+              label: 'name bool',
+              detail: 'booléen true/false (sans crochets)',
+              info: 'Déclare un booléen : var name bool\nExemple : var estActif bool = true',
+              type: 'keyword',
+              boost: 47,
+              apply: snippet('${1:name} bool'),
+            },
+            {
+              label: 'name float64',
+              detail: 'flottant décimal (sans crochets)',
+              info: 'Déclare un nombre à virgule : var name float64\nExemple : var prix float64 = 19.99',
+              type: 'keyword',
+              boost: 46,
+              apply: snippet('${1:name} float64'),
+            },
+            {
+              label: 'name any',
+              detail: 'type quelconque (sans crochets)',
+              info: 'Déclare une variable universelle (tout type de valeur - Go 1.18+).',
+              type: 'keyword',
+              boost: 45,
+              apply: snippet('${1:name} any'),
+            },
+            {
+              label: 'err error',
+              detail: 'erreur standard (sans crochets)',
+              info: 'Déclare une variable d\'erreur standard : var err error',
+              type: 'keyword',
+              boost: 45,
+              apply: snippet('${1:err} error'),
+            },
+            {
+              label: 'name []int',
+              detail: 'slice/liste d\'entiers (crochets [])',
+              info: 'Les crochets [] indiquent une LISTE d\'entiers (ex: []int{10, 20, 30}).\nPour un seul entier simple, choisissez "name int" sans crochets.',
+              type: 'keyword',
+              boost: 35,
+              apply: snippet('${1:name} []int'),
+            },
+            {
+              label: 'name []string',
+              detail: 'slice/liste de chaînes (crochets [])',
+              info: 'Les crochets [] indiquent une LISTE de chaînes de texte.',
+              type: 'keyword',
+              boost: 34,
+              apply: snippet('${1:name} []string'),
+            },
+            {
+              label: 'name []byte',
+              detail: 'slice d\'octets (crochets [])',
+              info: 'Les crochets [] indiquent une suite d\'octets bruts ([]byte).',
+              type: 'keyword',
+              boost: 33,
+              apply: snippet('${1:name} []byte'),
+            },
+          ],
+          validFor: /^[a-zA-Z0-9_]*$/,
+        };
+      }
+
       // Var types completion (only after typing "var <name> ")
       if (/\bvar\s+\w+\s*$/.test(textBefore)) {
         return {
           from: pos,
-          options: VAR_TYPE_COMPLETIONS,
-          validFor: /^[a-zA-Z0-9_]*$/,
+          options: VAR_TYPE_COMPLETIONS.map((item) => ({
+            label: item.label,
+            detail: item.detail,
+            info: item.info,
+            type: item.type,
+            boost: item.boost ?? 20,
+            apply: item.label,
+          })),
+          validFor: /^[a-zA-Z0-9_\[\]]*$/,
         };
       }
 
@@ -444,7 +597,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
         {
           key: 'Mod-Enter',
           run: () => {
-            onRun();
+            onRunRef.current();
             return true;
           },
         },
@@ -574,7 +727,8 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
       ...themeExtensions,
       layoutTheme,
       ...indentGuides,
-      createErrorGutter(errorLines),
+      errorLinesField,
+      errorDotGutter,
       customKeymap,
       autocompletion({
         override: [goCompletionSource],
@@ -585,7 +739,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
       }),
       EditorView.lineWrapping,
     ];
-  }, [completions, fontSize, onRun, themeId, onChange, errorLines]);
+  }, [completions, fontSize, themeId]);
 
   const isDark = AVAILABLE_THEMES.find((t) => t.id === themeId)?.isDark ?? true;
   const currentThemeConfig = AVAILABLE_THEMES.find((t) => t.id === themeId) || AVAILABLE_THEMES[0];
@@ -603,36 +757,10 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
         theme={isDark ? 'dark' : 'light'}
         extensions={extensions}
         onChange={onChange}
-        basicSetup={{
-          lineNumbers: true,
-          highlightActiveLineGutter: true,
-          highlightSpecialChars: true,
-          history: true,
-          foldGutter: true,
-          drawSelection: true,
-          dropCursor: true,
-          allowMultipleSelections: true,
-          indentOnInput: true,
-          syntaxHighlighting: false,
-          bracketMatching: true,
-          closeBrackets: true,
-          autocompletion: false,
-          rectangularSelection: true,
-          crosshairCursor: true,
-          highlightActiveLine: true,
-          highlightSelectionMatches: true,
-          closeBracketsKeymap: true,
-          defaultKeymap: true,
-          searchKeymap: true,
-          historyKeymap: true,
-          foldKeymap: true,
-          completionKeymap: false,
-          lintKeymap: false,
-          tabSize: 4,
-        }}
+        basicSetup={DEFAULT_BASIC_SETUP}
       />
     </div>
   );
-});
+}));
 
 Editor.displayName = 'Editor';
