@@ -12,22 +12,49 @@ import {
   moveCompletionSelection,
   closeCompletion,
   startCompletion,
+  selectedCompletion,
+  currentCompletions,
+  setSelectedCompletion,
   CompletionContext,
   Completion,
   snippet,
 } from '@codemirror/autocomplete';
-import { linter, lintGutter, Diagnostic as CmDiagnostic } from '@codemirror/lint';
-import { keymap, EditorView } from '@codemirror/view';
+import { keymap, EditorView, gutter, GutterMarker } from '@codemirror/view';
 import { Prec, Extension } from '@codemirror/state';
+import { indentationMarkers } from '@replit/codemirror-indentation-markers';
 import {
   buildCompletionsList,
   getPackageMembers,
   PRINT_DECLINATIONS,
   VAR_TYPE_COMPLETIONS,
 } from '../data/goCompletions';
-import { analyzeGoCode } from '../services/goAnalyzer';
 import { ThemeId, getThemeExtension, AVAILABLE_THEMES } from '../theme/goThemes';
 import { ParsedError } from '../types';
+
+/**
+ * Gutter marker displaying a clean, elegant red dot on lines with errors
+ */
+class ErrorDotMarker extends GutterMarker {
+  toDOM() {
+    const dot = document.createElement('div');
+    dot.className = 'cm-error-dot';
+    dot.title = 'Erreur détectée sur cette ligne';
+    return dot;
+  }
+}
+const errorDotMarker = new ErrorDotMarker();
+
+function createErrorGutter(lines: number[]) {
+  const lineSet = new Set(lines.filter((l) => l > 0));
+  return gutter({
+    class: 'cm-error-gutter',
+    lineMarker(view, line) {
+      const lineObj = view.state.doc.lineAt(line.from);
+      return lineSet.has(lineObj.number) ? errorDotMarker : null;
+    },
+    lineMarkerChange: (update) => update.docChanged,
+  });
+}
 
 export interface EditorHandle {
   insertSnippet: (text: string) => void;
@@ -44,6 +71,7 @@ interface EditorProps {
   fontSize?: number;
   highlightedError?: ParsedError | null;
   themeId?: ThemeId;
+  errorLines?: number[];
 }
 
 /**
@@ -110,10 +138,11 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
   fontSize = 14,
   highlightedError,
   themeId = 'gopher-dark',
+  errorLines = [],
 }, ref) => {
   const cmRef = useRef<ReactCodeMirrorRef>(null);
 
-  // Expose imperative handle for mobile touch bar, fixes, and error jumping
+  // Expose imperative handle for mobile touch bar and actions
   useImperativeHandle(ref, () => ({
     insertSnippet: (snippetText: string) => {
       const view = cmRef.current?.view;
@@ -189,6 +218,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
       if (!view) return;
       const currentCode = view.state.doc.toString();
       const fixed = fixFn(currentCode);
+
       view.dispatch({
         changes: { from: 0, to: currentCode.length, insert: fixed },
       });
@@ -218,88 +248,73 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
             scrollIntoView: true,
           });
         } catch {
-          // ignore out of bounds
+          // line out of bounds
         }
       }
     }
   }, [highlightedError]);
 
-  // Build the rich Go autocompletion list
+  // Completions list
   const completions = useMemo(() => buildCompletionsList(), []);
 
   // Configure CodeMirror extensions
   const extensions = useMemo<Extension[]>(() => {
-    // 1. Completion source function for Go
+    const themeExtensions = getThemeExtension(themeId);
+    const themeConfig = AVAILABLE_THEMES.find((t) => t.id === themeId) || AVAILABLE_THEMES[0];
+    const isDark = themeConfig.isDark;
+
+    // 1. Contextual autocompletion source with auto-import
     const goCompletionSource = (context: CompletionContext) => {
-      const line = context.state.doc.lineAt(context.pos);
-      const textBefore = line.text.slice(0, context.pos - line.from);
+      const pos = context.pos;
+      const line = context.state.doc.lineAt(pos);
+      const textBefore = line.text.slice(0, pos - line.from);
 
-      // Check if user is typing after a package dot (e.g. "fmt." or "slices.")
-      const dotMatch = textBefore.match(/([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]*)$/);
-
-      if (dotMatch) {
-        const pkg = dotMatch[1];
-        const memberQuery = dotMatch[2].toLowerCase();
-        const from = context.pos - dotMatch[2].length;
-
-        const members = getPackageMembers(pkg);
-        if (members.length > 0) {
-          const matchedMembers = members.filter((m) => {
-            if (!memberQuery) return true;
-            return (
-              m.label.toLowerCase().includes(memberQuery) ||
-              m.detail.toLowerCase().includes(memberQuery) ||
-              (m.keywords && m.keywords.some((k) => k.includes(memberQuery)))
-            );
-          });
-
-          return {
-            from,
-            options: matchedMembers.map((m) => {
-              const baseSnippet = m.template ? snippet(m.template) : null;
-              return {
-                label: m.label,
-                detail: m.detail,
-                info: m.info,
-                type: m.type,
-                boost: (m.boost ?? 10) + 15,
-                apply: (view: EditorView, completion: Completion, fromPos: number, toPos: number) => {
-                  if (baseSnippet) {
-                    baseSnippet(view, completion, fromPos, toPos);
-                  } else {
-                    view.dispatch({
-                      changes: { from: fromPos, to: toPos, insert: m.label },
-                    });
-                  }
-                  if (m.pkg) {
-                    insertImportIfNeeded(view, m.pkg);
-                  }
-                },
-              };
-            }),
-            validFor: /^[a-zA-Z0-9_]*$/,
-          };
-        }
+      // Shorthand fp -> fmt.Println
+      const isPrintlnShorthand = /\bfp\b$/.test(textBefore);
+      if (isPrintlnShorthand) {
+        return {
+          from: pos - 2,
+          options: [
+            {
+              label: 'fmt.Println(...)',
+              detail: 'Raccourci fp',
+              info: 'Affiche sur la sortie standard avec saut de ligne (ajoute import "fmt")',
+              type: 'function',
+              boost: 100,
+              apply: (view: EditorView, completion: Completion, fromPos: number, toPos: number) => {
+                view.dispatch({
+                  changes: { from: fromPos, to: toPos, insert: 'fmt.Println()' },
+                  selection: { anchor: fromPos + 12 },
+                });
+                insertImportIfNeeded(view, 'fmt');
+              },
+            },
+          ],
+        };
       }
 
-      // Check if user just typed "var " -> automatically trigger the variable types menu!
-      const varMatch = textBefore.match(/(?:^|\s)var\s+([a-zA-Z0-9_]*)$/);
-      if (varMatch) {
-        const subquery = varMatch[1].toLowerCase();
-        const from = context.pos - varMatch[1].length;
+      // Var types completion (only after typing "var <name> ")
+      if (/\bvar\s+\w+\s*$/.test(textBefore)) {
+        return {
+          from: pos,
+          options: VAR_TYPE_COMPLETIONS,
+          validFor: /^[a-zA-Z0-9_]*$/,
+        };
+      }
 
-        const matchedTypes = VAR_TYPE_COMPLETIONS.filter((item) => {
-          if (!subquery) return true;
-          return (
-            item.label.toLowerCase().includes(subquery) ||
-            item.detail.toLowerCase().includes(subquery) ||
-            (item.keywords && item.keywords.some((k) => k.includes(subquery)))
-          );
-        });
+      // Dot completion (e.g. fmt.)
+      const dotMatch = textBefore.match(/([a-zA-Z0-9_]+)\.$/);
+      if (dotMatch) {
+        const pkgName = dotMatch[1];
+        const members = getPackageMembers(pkgName);
+
+        if (members.length === 0) {
+          return null;
+        }
 
         return {
-          from,
-          options: matchedTypes.map((item) => {
+          from: pos,
+          options: members.map((item) => {
             const baseSnippet = item.template ? snippet(item.template) : null;
             return {
               label: item.label,
@@ -325,16 +340,19 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
         };
       }
 
-      // General word matching
+      // General word completion: requires at least 1 word character unless explicitly invoked via Ctrl+Space
       const word = context.matchBefore(/[\w.]+/);
       if (!word && !context.explicit) return null;
+      if (word && word.text.trim().length === 0 && !context.explicit) return null;
 
       const query = word ? word.text.toLowerCase() : '';
-      const isPrintQuery = 'print'.startsWith(query) || query.startsWith('print') || query === 'p' || query === 'pr';
+      if (!query && !context.explicit) return null;
 
       const matched: Completion[] = [];
 
-      // If query is specifically related to print, prioritize all Print declinations
+      const isPrintQuery =
+        query === 'print' || query === 'println' || query === 'printf' || query === 'p';
+
       if (isPrintQuery) {
         for (const item of PRINT_DECLINATIONS) {
           const baseSnippet = item.template ? snippet(item.template) : null;
@@ -343,7 +361,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
             detail: item.detail,
             info: item.info,
             type: item.type,
-            boost: (item.boost ?? 20) + 20,
+            boost: item.boost ?? 25,
             apply: (view: EditorView, completion: Completion, fromPos: number, toPos: number) => {
               if (baseSnippet) {
                 baseSnippet(view, completion, fromPos, toPos);
@@ -373,6 +391,8 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
         }
       }
 
+      if (matched.length === 0) return null;
+
       return {
         from: word ? word.from : context.pos,
         options: matched,
@@ -380,8 +400,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
       };
     };
 
-    // 2. Keyboard navigation bindings:
-    // Arrow keys navigate, Enter validates
+    // 2. Keyboard navigation bindings
     const customKeymap = Prec.highest(
       keymap.of([
         {
@@ -394,11 +413,25 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
         },
         {
           key: 'Enter',
-          run: acceptCompletion,
+          run: (view) => {
+            // Only accept completion if an option is actively highlighted in the popup
+            if (selectedCompletion(view.state)) {
+              return acceptCompletion(view);
+            }
+            return false;
+          },
         },
         {
           key: 'Tab',
-          run: acceptCompletion,
+          run: (view) => {
+            if (acceptCompletion(view)) return true;
+            const activeOpts = currentCompletions(view.state);
+            if (activeOpts.length > 0) {
+              view.dispatch({ effects: setSelectedCompletion(0) });
+              return acceptCompletion(view);
+            }
+            return false;
+          },
         },
         {
           key: 'Escape',
@@ -418,56 +451,6 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
       ])
     );
 
-    // 3. Real-Time Automatic Error Detection & In-Editor Quick-Fixes
-    const goLinter = linter(
-      (view) => {
-        const code = view.state.doc.toString();
-        const diagnostics = analyzeGoCode(code);
-        const cmDiagnostics: CmDiagnostic[] = [];
-
-        for (const d of diagnostics) {
-          const docLen = view.state.doc.length;
-          const from = Math.max(0, Math.min(d.from ?? 0, docLen));
-          const to = Math.max(from, Math.min(d.to ?? from + 1, docLen));
-
-          const explanationText = d.insight
-            ? `${d.message}\n\n🎓 Ce qu'il faut comprendre en Go :\n${d.insight.whyGoWorksThisWay}${d.insight.proTip ? `\n\n💡 Astuce : ${d.insight.proTip}` : ''}`
-            : `${d.message}\n\n💡 ${d.explanation}`;
-
-          cmDiagnostics.push({
-            from,
-            to,
-            severity: d.severity === 'error' ? 'error' : d.severity === 'warning' ? 'warning' : 'info',
-            message: explanationText,
-            actions: d.fix
-              ? [
-                  {
-                    name: `⚡ Corriger en 1 clic : ${d.fix.label}`,
-                    apply: (editorView: EditorView) => {
-                      const cur = editorView.state.doc.toString();
-                      const fixed = d.fix!.apply(cur);
-                      editorView.dispatch({
-                        changes: { from: 0, to: cur.length, insert: fixed },
-                      });
-                      onChange(fixed);
-                    },
-                  },
-                ]
-              : undefined,
-          });
-        }
-
-        return cmDiagnostics;
-      },
-      { delay: 250 }
-    );
-
-    // 4. Theme & Syntax highlighting extensions
-    const themeExtensions = getThemeExtension(themeId);
-    const themeConfig = AVAILABLE_THEMES.find((t) => t.id === themeId) || AVAILABLE_THEMES[0];
-    const isDark = themeConfig.isDark;
-
-    // 5. Base editor layout, diagnostics, & font styling
     const layoutTheme = EditorView.theme({
       '&': {
         height: '100%',
@@ -475,81 +458,38 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
         fontFamily: "'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
       },
       '.cm-scroller': {
+        lineHeight: '1.65',
         overflow: 'auto',
-        fontFamily: "'Fira Code', monospace",
-        lineHeight: '1.6',
+      },
+      '.cm-content': {
+        caretColor: isDark ? '#38bdf8' : '#0284c7',
         paddingBottom: '80px',
       },
-      // In-line diagnostics tooltip styling
-      '.cm-tooltip-lint': {
-        backgroundColor: isDark ? '#090d1a !important' : '#ffffff !important',
-        border: `1.5px solid ${isDark ? '#e11d48' : '#f43f5e'} !important`,
-        borderRadius: '12px !important',
-        boxShadow: isDark
-          ? '0 20px 30px -5px rgba(0, 0, 0, 0.8), 0 0 20px rgba(225, 29, 72, 0.25) !important'
-          : '0 20px 25px -5px rgba(0, 0, 0, 0.15) !important',
-        padding: '10px !important',
-        minWidth: '280px',
-        maxWidth: '440px',
-        zIndex: '160 !important',
+
+      // Red dot gutter error marker styling
+      '.cm-error-gutter': {
+        width: '18px',
+        backgroundColor: 'transparent',
       },
-      '.cm-diagnostic': {
-        padding: '4px 0 !important',
-        fontSize: '12px !important',
-        fontFamily: "'Fira Code', monospace !important",
-        lineHeight: '1.5 !important',
-        color: isDark ? '#f1f5f9 !important' : '#0f172a !important',
+      '.cm-error-gutter .cm-gutterElement': {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '0 !important',
       },
-      '.cm-diagnosticAction': {
-        marginTop: '8px !important',
-        padding: '5px 10px !important',
-        backgroundColor: '#00ADD8 !important',
-        color: '#020617 !important',
-        fontWeight: 'bold !important',
-        fontSize: '11px !important',
-        borderRadius: '6px !important',
-        border: 'none !important',
-        cursor: 'pointer !important',
-        display: 'inline-flex !important',
-        alignItems: 'center !important',
-        gap: '4px !important',
-        transition: 'transform 0.1s ease !important',
-      },
-      '.cm-diagnosticAction:active': {
-        transform: 'scale(0.96) !important',
-      },
-      // Gutter lint marks
-      '.cm-lint-marker': {
-        width: '12px',
-        height: '12px',
+      '.cm-error-dot': {
+        width: '8px',
+        height: '8px',
+        borderRadius: '50%',
+        backgroundColor: '#ef4444',
+        boxShadow: '0 0 6px rgba(239, 68, 68, 0.95), 0 0 12px rgba(239, 68, 68, 0.5)',
         cursor: 'pointer',
+        transition: 'transform 0.15s ease',
       },
-      '.cm-lint-marker-error': {
-        content: '""',
-        display: 'inline-block',
-        width: '8px',
-        height: '8px',
-        borderRadius: '50%',
-        backgroundColor: '#f43f5e',
-        boxShadow: '0 0 6px #f43f5e',
-        marginLeft: '4px',
+      '.cm-error-dot:hover': {
+        transform: 'scale(1.35)',
       },
-      '.cm-lint-marker-warning': {
-        content: '""',
-        display: 'inline-block',
-        width: '8px',
-        height: '8px',
-        borderRadius: '50%',
-        backgroundColor: '#f59e0b',
-        boxShadow: '0 0 6px #f59e0b',
-        marginLeft: '4px',
-      },
-      // Base Tooltip Override
-      '.cm-tooltip': {
-        backgroundColor: isDark ? '#090d1a !important' : '#ffffff !important',
-        color: isDark ? '#f8fafc !important' : '#0f172a !important',
-        border: `1.5px solid ${isDark ? themeConfig.borderHex : '#94a3b8'} !important`,
-      },
+
       // Autocomplete Popup Box Styling
       '.cm-tooltip-autocomplete': {
         backgroundColor: isDark ? '#090d1a !important' : '#ffffff !important',
@@ -591,38 +531,16 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
           ? '0 2px 10px rgba(0, 0, 0, 0.5) !important'
           : '0 4px 12px rgba(2, 132, 199, 0.35) !important',
       },
-      // Completion Labels (Function/keyword/variable name)
       '.cm-completionLabel': {
         color: isDark ? '#38bdf8 !important' : '#0369a1 !important',
         fontWeight: '700 !important',
         fontSize: '13px !important',
       },
-      '.cm-tooltip-autocomplete ul li[aria-selected] .cm-completionLabel': {
-        color: '#ffffff !important',
-        fontWeight: '700 !important',
-      },
-      // Matched typed characters highlighting
       '.cm-completionMatchedText': {
         color: isDark ? '#00ADD8 !important' : '#0284c7 !important',
         fontWeight: '800 !important',
         textDecoration: 'underline !important',
       },
-      '.cm-tooltip-autocomplete ul li[aria-selected] .cm-completionMatchedText': {
-        color: '#ffffff !important',
-        fontWeight: '800 !important',
-        textDecoration: 'underline !important',
-      },
-      // Icons
-      '.cm-completionIcon': {
-        color: isDark ? '#38bdf8 !important' : '#0284c7 !important',
-        marginRight: '6px !important',
-        opacity: '0.9 !important',
-      },
-      '.cm-tooltip-autocomplete ul li[aria-selected] .cm-completionIcon': {
-        color: '#ffffff !important',
-        opacity: '1 !important',
-      },
-      // Details Badge (Type / Signature / Package)
       '.cm-completionDetail': {
         color: isDark ? '#cbd5e1 !important' : '#334155 !important',
         fontStyle: 'normal',
@@ -632,32 +550,22 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
         padding: '2px 7px',
         borderRadius: '5px',
         marginLeft: 'auto',
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        maxWidth: '220px',
       },
-      '.cm-tooltip-autocomplete ul li[aria-selected] .cm-completionDetail': {
-        color: '#ffffff !important',
-        backgroundColor: 'rgba(0, 0, 0, 0.28) !important',
-        border: '1px solid rgba(255, 255, 255, 0.3) !important',
-      },
-      // Explanation Box (Info / documentation panel next to suggestions)
-      '.cm-tooltip-completionInfo, .cm-completionInfo': {
-        backgroundColor: isDark ? '#0f172a !important' : '#ffffff !important',
-        border: `2px solid ${isDark ? themeConfig.borderHex : '#0284c7'} !important`,
-        borderRadius: '10px !important',
-        color: isDark ? '#f8fafc !important' : '#0f172a !important',
-        padding: '12px 14px !important',
-        minWidth: '280px',
-        maxWidth: 'min(460px, calc(100vw - 32px)) !important',
-        fontSize: '12px !important',
-        lineHeight: '1.55 !important',
-        boxShadow: isDark
-          ? '0 15px 30px rgba(0, 0, 0, 0.7) !important'
-          : '0 12px 28px -4px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(2, 132, 199, 0.15) !important',
-        whiteSpace: 'pre-wrap !important',
-        fontFamily: "'Fira Code', monospace !important",
+    });
+
+    // Vertical indentation guide lines: connects starting point of an element to its closing
+    // Each nested scope has its own indentation column so lines run parallel and never overlap
+    const indentGuides = indentationMarkers({
+      highlightActiveBlock: true,
+      hideFirstIndent: false,
+      markerType: 'fullScope',
+      thickness: 1.5,
+      activeThickness: 2,
+      colors: {
+        light: themeConfig.isWin98 ? '#9ca3af' : 'rgba(0, 0, 0, 0.15)',
+        dark: 'rgba(255, 255, 255, 0.14)',
+        activeLight: themeConfig.isWin98 ? '#000080' : '#0284c7',
+        activeDark: themeConfig.accentHex || '#38bdf8',
       },
     });
 
@@ -665,19 +573,19 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
       go(),
       ...themeExtensions,
       layoutTheme,
+      ...indentGuides,
+      createErrorGutter(errorLines),
       customKeymap,
-      lintGutter(),
-      goLinter,
       autocompletion({
         override: [goCompletionSource],
         activateOnTyping: true,
-        selectOnOpen: true,
+        selectOnOpen: false,
         maxRenderedOptions: 30,
         defaultKeymap: false,
       }),
       EditorView.lineWrapping,
     ];
-  }, [completions, fontSize, onRun, themeId, onChange]);
+  }, [completions, fontSize, onRun, themeId, onChange, errorLines]);
 
   const isDark = AVAILABLE_THEMES.find((t) => t.id === themeId)?.isDark ?? true;
   const currentThemeConfig = AVAILABLE_THEMES.find((t) => t.id === themeId) || AVAILABLE_THEMES[0];
@@ -719,7 +627,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({
           historyKeymap: true,
           foldKeymap: true,
           completionKeymap: false,
-          lintKeymap: true,
+          lintKeymap: false,
           tabSize: 4,
         }}
       />

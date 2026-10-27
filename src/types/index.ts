@@ -18,6 +18,7 @@ export interface CompileResult {
   errors: string;
   vetErrors: string;
   executionTimeMs?: number;
+  stdinUsed?: string;
 }
 
 export interface ParsedError {

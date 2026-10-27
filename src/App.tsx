@@ -3,15 +3,13 @@ import { Header } from './components/Header';
 import { Editor, EditorHandle } from './components/Editor';
 import { MobileAccessoryBar } from './components/MobileAccessoryBar';
 import { Terminal } from './components/Terminal';
-import { DiagnosticBanner } from './components/DiagnosticBanner';
 import { LessonDrawer } from './components/LessonDrawer';
 import { FileDrawer } from './components/FileDrawer';
-import { LearningToast } from './components/LearningToast';
 import { LearningNotebookDrawer } from './components/LearningNotebookDrawer';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { runGoCode, parseGoErrors } from './services/goRunner';
 import { formatGoCode } from './services/goFormatter';
-import { analyzeGoCode, applyAllFixes, GoDiagnostic } from './services/goAnalyzer';
+import { analyzeGoCode, GoDiagnostic } from './services/goAnalyzer';
 import { GoFile, CompileResult, ParsedError, GoLesson, LearnedRule } from './types';
 import { ThemeId, AVAILABLE_THEMES } from './theme/goThemes';
 
@@ -153,9 +151,7 @@ export default function App() {
   const [isLearningNotebookOpen, setIsLearningNotebookOpen] = useState(false);
   const [currentLessonId, setCurrentLessonId] = useState<string | undefined>();
 
-  // Learning Toast & Learned Rules tracking
-  const [learningToastDiag, setLearningToastDiag] = useState<GoDiagnostic | null>(null);
-  const [learningToastCount, setLearningToastCount] = useState<number>(1);
+  // Learned Rules tracking
   const [learnedRules, setLearnedRules] = useState<LearnedRule[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_LEARNED_RULES);
@@ -178,7 +174,7 @@ export default function App() {
     return analyzeGoCode(activeFile.content);
   }, [activeFile?.content]);
 
-  // Combined diagnostics (static rules + background compiler checks)
+  // Combined diagnostics (static rules + background compiler checks + parsed runtime compiler errors)
   const diagnostics = useMemo(() => {
     // If static analysis already found errors, prioritize them
     const combined = [...staticDiagnostics];
@@ -187,8 +183,28 @@ export default function App() {
         combined.push(sDiag);
       }
     }
+    // Also include any compiler errors from manual Run so they're visible in banner and quick-fix
+    for (const pErr of parsedErrors) {
+      if (!combined.some((c) => c.line === pErr.line && c.message.includes(pErr.message))) {
+        combined.push({
+          id: `run-err-${pErr.line}-${pErr.column || 0}`,
+          line: pErr.line || 1,
+          column: pErr.column,
+          severity: 'error',
+          rule: 'compiler-error',
+          message: pErr.message,
+          explanation: `Erreur du compilateur : "${pErr.message}". Consultez le rapport dans le log pour plus de détails.`,
+          insight: {
+            concept: 'Erreur de compilation Go',
+            whatWasWrong: pErr.message,
+            whyGoWorksThisWay: 'Le compilateur Go officiel signale cette erreur de syntaxe ou de déclaration.',
+            proTip: "Le point rouge dans l'éditeur indique la ligne concernée par l'erreur.",
+          },
+        });
+      }
+    }
     return combined;
-  }, [staticDiagnostics, serverDiagnostics]);
+  }, [staticDiagnostics, serverDiagnostics, parsedErrors]);
 
   // Debounced background compiler verification to catch compiler-specific checks
   useEffect(() => {
@@ -347,80 +363,29 @@ export default function App() {
     }
   }, []);
 
-  // Jump to line from DiagnosticBanner
+  // Jump to line
   const handleJumpToLine = useCallback((line: number) => {
     editorRef.current?.jumpToLine(line);
   }, []);
 
-  // Apply single diagnostic fix in 1 click and trigger educational lesson
-  const handleApplyFix = useCallback((diag: GoDiagnostic) => {
-    if (!diag.fix) return;
-
-    // 1. Apply code modification
-    if (editorRef.current) {
-      editorRef.current.applyFix(diag.fix.apply);
-    } else if (activeFile) {
-      const fixedCode = diag.fix.apply(activeFile.content);
-      handleCodeChange(fixedCode);
-    }
-
-    // 2. Archive to user's Learning Notebook
-    const newLearnedRule: LearnedRule = {
-      id: `rule-${Date.now()}-${diag.id}`,
-      timestamp: Date.now(),
-      concept: diag.insight?.concept || diag.rule,
-      whatWasWrong: diag.insight?.whatWasWrong || diag.message,
-      whyGoWorksThisWay: diag.insight?.whyGoWorksThisWay || diag.explanation,
-      proTip: diag.insight?.proTip || '',
-      fixApplied: diag.fix.label,
-      ruleId: diag.rule,
-    };
-
-    setLearnedRules((prev) => [
-      newLearnedRule,
-      ...prev.filter((r) => r.ruleId !== diag.rule),
-    ]);
-
-    // 3. Display didactic Learning Toast so the user learns the Go concept!
-    setLearningToastDiag(diag);
-    setLearningToastCount(1);
-  }, [activeFile, handleCodeChange]);
-
-  // Apply all available fixes at once and present educational lessons
-  const handleApplyAllFixes = useCallback(() => {
-    if (!activeFile) return;
-    const fixable = diagnostics.filter((d) => d.fix !== undefined);
-    if (fixable.length === 0) return;
-
-    // 1. Apply all fixes
-    const fixedCode = applyAllFixes(activeFile.content, diagnostics);
-    if (editorRef.current) {
-      editorRef.current.applyFix(() => fixedCode);
+  // Lines concerned by errors (shows a clean red dot on the line in the editor gutter)
+  const errorLines = useMemo(() => {
+    const lines = new Set<number>();
+    if (compileResult && !compileResult.success && parsedErrors.length > 0) {
+      for (const err of parsedErrors) {
+        if (err.line && err.line > 0) {
+          lines.add(err.line);
+        }
+      }
     } else {
-      handleCodeChange(fixedCode);
+      for (const diag of diagnostics) {
+        if (diag.line && diag.line > 0) {
+          lines.add(diag.line);
+        }
+      }
     }
-
-    // 2. Archive all fixed rules into Learning Notebook
-    const newRules: LearnedRule[] = fixable.map((d) => ({
-      id: `rule-${Date.now()}-${d.id}`,
-      timestamp: Date.now(),
-      concept: d.insight?.concept || d.rule,
-      whatWasWrong: d.insight?.whatWasWrong || d.message,
-      whyGoWorksThisWay: d.insight?.whyGoWorksThisWay || d.explanation,
-      proTip: d.insight?.proTip || '',
-      fixApplied: d.fix?.label || 'Correction automatique',
-      ruleId: d.rule,
-    }));
-
-    setLearnedRules((prev) => {
-      const existingRuleIds = new Set(newRules.map((r) => r.ruleId));
-      return [...newRules, ...prev.filter((r) => !existingRuleIds.has(r.ruleId))];
-    });
-
-    // 3. Show educational toast with the first fixed rule
-    setLearningToastDiag(fixable[0]);
-    setLearningToastCount(fixable.length);
-  }, [activeFile, diagnostics, handleCodeChange]);
+    return Array.from(lines);
+  }, [compileResult, parsedErrors, diagnostics]);
 
   // Clear terminal
   const handleClearTerminal = useCallback(() => {
@@ -676,6 +641,7 @@ export default function App() {
                 fontSize={fontSize}
                 highlightedError={highlightedError}
                 themeId={themeId}
+                errorLines={errorLines}
               />
             ) : (
               <div className="flex items-center justify-center h-full text-slate-500 text-sm">
@@ -685,34 +651,25 @@ export default function App() {
           </div>
         </div>
 
-        {/* Real-Time Automatic Error Detection & Quick-Fixes Banner */}
-        <DiagnosticBanner
-          diagnostics={diagnostics}
-          onApplyFix={handleApplyFix}
-          onApplyAllFixes={handleApplyAllFixes}
-          onJumpToLine={handleJumpToLine}
-          isBackgroundChecking={isBackgroundChecking}
-        />
-
         {/* Android Mobile Touch Accessory Toolbar */}
         <MobileAccessoryBar
           onInsert={handleInsertSnippet}
         />
 
-        {/* Integrated Resizable Terminal */}
+        {/* Integrated Resizable Terminal / Log where errors appear before and after compile */}
         <Terminal
           result={compileResult}
           isRunning={isRunning}
           onClear={handleClearTerminal}
           onJumpToError={handleJumpToError}
           parsedErrors={parsedErrors}
+          diagnostics={diagnostics}
           onRunAgain={handleRun}
           isCollapsed={isTerminalCollapsed}
           onToggleCollapse={() => setIsTerminalCollapsed((prev) => !prev)}
           height={terminalHeight}
           onHeightChange={setTerminalHeight}
           activeCode={activeFile?.content}
-          onApplyFix={handleApplyFix}
           isWin98={activeTheme.isWin98}
           isDark={activeTheme.isDark}
         />
@@ -742,17 +699,6 @@ export default function App() {
           </footer>
         )}
       </main>
-
-      {/* Interactive Didactic Toast for 1-Click Fixes */}
-      <LearningToast
-        diagnostic={learningToastDiag}
-        countFixed={learningToastCount}
-        onClose={() => setLearningToastDiag(null)}
-        onOpenNotebook={() => {
-          setLearningToastDiag(null);
-          setIsLearningNotebookOpen(true);
-        }}
-      />
 
       {/* Side Drawers */}
       <LearningNotebookDrawer

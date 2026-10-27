@@ -1,4 +1,4 @@
-import { GoEducationalInsight } from '../types';
+import { GoEducationalInsight, ParsedError } from '../types';
 
 export interface GoFix {
   label: string;
@@ -269,6 +269,49 @@ export function analyzeGoCode(code: string): GoDiagnostic[] {
         apply: (c) => `package main\n\n${c}`,
       },
     });
+  }
+
+  // 1b. Check for duplicate package declarations (e.g. line 1 and line 2 'package main')
+  const packageMatches: { lineIndex: number; text: string }[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*package\s+\w+/.test(lines[i])) {
+      packageMatches.push({ lineIndex: i, text: lines[i] });
+    }
+  }
+  if (packageMatches.length > 1) {
+    for (let p = 1; p < packageMatches.length; p++) {
+      const dup = packageMatches[p];
+      const lineOffset = getLineOffset(dup.lineIndex);
+      diagnostics.push({
+        id: `duplicate-package-${dup.lineIndex}`,
+        line: dup.lineIndex + 1,
+        column: 1,
+        from: lineOffset,
+        to: lineOffset + dup.text.length,
+        severity: 'error',
+        rule: 'duplicate-package',
+        message: `Déclaration 'package' en double à la ligne ${dup.lineIndex + 1}. Un fichier Go ne peut comporter qu'une seule déclaration de package.`,
+        explanation:
+          "En Go, la clause 'package' doit figurer une seule fois en tout début de fichier. Une deuxième déclaration 'package' bloque le compilateur avec l'erreur : 'syntax error: non-declaration statement outside function body'.",
+        insight: {
+          concept: "Clause de paquet unique (Single Package Clause)",
+          whatWasWrong: `Vous avez déclaré deux fois 'package' (ligne ${packageMatches[0].lineIndex + 1} et ligne ${dup.lineIndex + 1}).`,
+          whyGoWorksThisWay:
+            "En Go, un fichier source appartient entièrement à un seul package. Déclarer une deuxième fois 'package' est invalide car le compilateur s'attend à des déclarations de variables, types ou fonctions.",
+          proTip: "Supprimez la ligne 'package' redondante pour restaurer la compilation.",
+          officialRule: "A source file begins with a package clause defining the package to which the file belongs.",
+        },
+        fix: {
+          label: `Supprimer 'package' en double (ligne ${dup.lineIndex + 1})`,
+          description: "Supprime la déclaration de package superflue pour restaurer la compilation.",
+          apply: (c) => {
+            const allLines = c.split('\n');
+            allLines.splice(dup.lineIndex, 1);
+            return allLines.join('\n');
+          },
+        },
+      });
+    }
   }
 
   // 2. Check for missing func main() when package is main
@@ -776,7 +819,86 @@ export function explainAndFixCompilerError(
     }
   }
 
-  // Fallback generic compiler error with explanation
+  // Pattern 5: syntax error: non-declaration statement outside function body
+  if (trimmed.includes('non-declaration statement outside function body')) {
+    const linesList = code.split('\n');
+    const targetLineText = linesList[line - 1] || '';
+
+    // Check if target line is a duplicate package declaration (e.g. line 2 'package main')
+    if (/^\s*package\s+\w+/.test(targetLineText) && line > 1) {
+      return {
+        id: `comp-dup-pkg-${Date.now()}`,
+        line,
+        severity: 'error',
+        rule: 'duplicate-package',
+        message: `Déclaration 'package' en double à la ligne ${line}.`,
+        explanation: `Un fichier Go ne peut comporter qu'une seule clause de package en tête de fichier. La clause à la ligne ${line} est redondante.`,
+        insight: {
+          concept: "Clause de paquet unique en tête de fichier",
+          whatWasWrong: `La ligne ${line} contient une deuxième déclaration 'package main' qui perturbe le compilateur.`,
+          whyGoWorksThisWay: "Un fichier source Go n'appartient qu'à un seul package. Toute déclaration de package répétée est rejetée comme une instruction hors fonction.",
+          proTip: "Supprimez la ligne de package en double pour restaurer la compilation.",
+        },
+        fix: {
+          label: `Supprimer 'package' en double (ligne ${line})`,
+          description: "Retire la ligne 2 pour que le compilateur accepte le programme.",
+          apply: (c) => {
+            const l = c.split('\n');
+            if (l.length >= line) {
+              l.splice(line - 1, 1);
+              return l.join('\n');
+            }
+            return autoRepairGoCode(c).repairedCode;
+          },
+        },
+      };
+    }
+
+    return {
+      id: `comp-nondecl-${Date.now()}`,
+      line,
+      severity: 'error',
+      rule: 'statement-outside-function',
+      message: `Instruction hors fonction à la ligne ${line}.`,
+      explanation: `En Go, seules les déclarations (var, const, type, func, import) peuvent être au niveau du package. Les instructions exécutables doivent être placées à l'intérieur d'une fonction (ex: func main()).`,
+      insight: {
+        concept: "Instructions exécutables à l'intérieur des fonctions",
+        whatWasWrong: `L'instruction à la ligne ${line} est en dehors du corps d'une fonction.`,
+        whyGoWorksThisWay: "Go est un langage compilé strict : aucun code exécutable libre ne peut flotter au niveau global.",
+        proTip: "Placez votre instruction dans la fonction 'func main() { ... }'.",
+      },
+      fix: {
+        label: "Corriger avec l'IDE (surligné 1 min)",
+        description: "Nettoie la structure du fichier et replace les instructions.",
+        apply: (c) => autoRepairGoCode(c).repairedCode,
+      },
+    };
+  }
+
+  // Pattern 6: syntax error: imports must appear before other declarations
+  if (trimmed.includes('imports must appear before other declarations')) {
+    return {
+      id: `comp-import-order-${Date.now()}`,
+      line,
+      severity: 'error',
+      rule: 'import-order',
+      message: "L'importation doit se situer avant toute autre déclaration.",
+      explanation: "En Go, l'ordre légal d'un fichier source est : 'package ...' puis 'import (...)', puis les déclarations de fonctions ou variables.",
+      insight: {
+        concept: "Ordre structurel strict des fichiers Go",
+        whatWasWrong: "Le bloc d'importation apparaît après des déclarations de package ou de code.",
+        whyGoWorksThisWay: "Go impose une structure prévisible : d'abord le package, puis les dépendances (imports), puis le corps du code.",
+        proTip: "Placez toujours le bloc import (...) juste après 'package main'.",
+      },
+      fix: {
+        label: "Réordonner la structure du fichier",
+        description: "Nettoie et réorganise les déclarations dans l'ordre Go officiel.",
+        apply: (c) => autoRepairGoCode(c).repairedCode,
+      },
+    };
+  }
+
+  // Fallback generic compiler error with explanation and auto-repair fix
   return {
     id: `comp-gen-${Date.now()}`,
     line,
@@ -791,6 +913,129 @@ export function explainAndFixCompilerError(
         "Le compilateur Go applique des vérifications strictes de types, de portée et de syntaxe pour garantir qu'aucune erreur ne survive au moment de l'exécution.",
       proTip: "Vérifiez les types des variables et les arguments de la fonction.",
     },
+    fix: {
+      label: "Corriger automatiquement les erreurs",
+      description: "L'IDE analyse et applique automatiquement les réparations de syntaxe, d'imports et de doublons.",
+      apply: (c) => autoRepairGoCode(c).repairedCode,
+    },
+  };
+}
+
+/**
+ * Master repair function: automatically corrects syntax, structure, duplicate packages,
+ * misplaced imports, lowercase function typos, and unclosed braces.
+ */
+export function autoRepairGoCode(code: string, parsedErrors: ParsedError[] = []): {
+  repairedCode: string;
+  hasChanges: boolean;
+  changesApplied: string[];
+} {
+  let updated = code;
+  const changes: string[] = [];
+
+  // 1. Remove duplicate package declarations (e.g. line 1 and 2 'package main')
+  const lines = updated.split('\n');
+  const pkgLines: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*package\s+\w+/.test(lines[i])) {
+      pkgLines.push(i);
+    }
+  }
+  if (pkgLines.length > 1) {
+    for (let i = pkgLines.length - 1; i >= 1; i--) {
+      const idxToRemove = pkgLines[i];
+      lines.splice(idxToRemove, 1);
+      changes.push(`Suppression de 'package' redondant (ligne ${idxToRemove + 1})`);
+    }
+    updated = lines.join('\n');
+  }
+
+  // 2. Ensure package main exists if missing
+  if (!/^\s*package\s+\w+/m.test(updated)) {
+    updated = `package main\n\n${updated}`;
+    changes.push("Ajout de 'package main'");
+  }
+
+  // 3. Fix common lowercase functions (fmt.println -> fmt.Println)
+  for (const [wrong, info] of Object.entries(COMMON_CASE_ERRORS)) {
+    if (updated.includes(wrong)) {
+      updated = updated.split(wrong).join(info.correct);
+      changes.push(`Correction '${wrong}' ➔ '${info.correct}'`);
+      updated = addImportToCode(updated, info.pkg);
+    }
+  }
+
+  // 4. Fix builtin print/println -> fmt.Println
+  if (/\b(println|print)\s*\(/.test(updated) && !/\bfmt\.(println|print)\b/.test(updated)) {
+    updated = updated.replace(/\bprintln\s*\(/g, 'fmt.Println(');
+    updated = updated.replace(/\bprint\s*\(/g, 'fmt.Print(');
+    updated = addImportToCode(updated, 'fmt');
+    changes.push("Remplacement de 'println()' par 'fmt.Println()'");
+  }
+
+  // 5. Fix := typos (::= or : =)
+  if (/::=|:\s+=/.test(updated)) {
+    updated = updated.replace(/::=|:\s+=/g, ':=');
+    changes.push("Correction de l'opérateur d'assignation ':='");
+  }
+
+  // 6. Fix compiler-reported unused imports
+  for (const err of parsedErrors) {
+    const unusedMatch = err.message.match(/(?:imported and not used:\s*"([^"]+)"|"([^"]+)"\s+imported and not used)/);
+    if (unusedMatch) {
+      const pkgToRemove = unusedMatch[1] || unusedMatch[2];
+      if (pkgToRemove) {
+        updated = removeImportFromCode(updated, pkgToRemove);
+        changes.push(`Suppression de l'import inutilisé "${pkgToRemove}"`);
+      }
+    }
+  }
+
+  // 7. Check unclosed braces
+  let openBraces = 0;
+  let inString = false;
+  let strChar = '';
+  for (let i = 0; i < updated.length; i++) {
+    const char = updated[i];
+    const prev = i > 0 ? updated[i - 1] : '';
+    if (inString) {
+      if (char === strChar && prev !== '\\') inString = false;
+      continue;
+    }
+    if (char === '"' || char === '`') {
+      inString = true;
+      strChar = char;
+      continue;
+    }
+    if (char === '{') openBraces++;
+    else if (char === '}') openBraces--;
+  }
+
+  if (openBraces > 0) {
+    updated = `${updated.trimEnd()}\n${'}'.repeat(openBraces)}\n`;
+    changes.push(`Ajout de ${openBraces} accolade(s) fermante(s) '}'`);
+  }
+
+  // 8. Run any available static diagnostics fixes
+  const staticDiags = analyzeGoCode(updated);
+  for (const d of staticDiags) {
+    if (d.fix) {
+      try {
+        const next = d.fix.apply(updated);
+        if (next !== updated) {
+          updated = next;
+          changes.push(d.fix.label);
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return {
+    repairedCode: updated,
+    hasChanges: updated !== code,
+    changesApplied: changes,
   };
 }
 
@@ -811,6 +1056,89 @@ export function applyAllFixes(code: string, diagnostics: GoDiagnostic[]): string
     }
   }
 
+  // If no static fix was applied, run master auto-repair
+  if (updatedCode === code) {
+    updatedCode = autoRepairGoCode(code).repairedCode;
+  }
+
   return updatedCode;
+}
+
+/**
+ * Detects which lines were modified, added, or replaced between oldCode and newCode.
+ * Returns 1-based line numbers in the new document.
+ */
+export function findModifiedLineNumbers(oldCode: string, newCode: string): number[] {
+  if (oldCode === newCode) return [];
+  const oldLines = oldCode.split('\n');
+  const newLines = newCode.split('\n');
+
+  // Match common prefix lines
+  let prefix = 0;
+  while (
+    prefix < oldLines.length &&
+    prefix < newLines.length &&
+    oldLines[prefix] === newLines[prefix]
+  ) {
+    prefix++;
+  }
+
+  // Match common suffix lines from end
+  let oldSuffix = oldLines.length - 1;
+  let newSuffix = newLines.length - 1;
+  while (
+    oldSuffix >= prefix &&
+    newSuffix >= prefix &&
+    oldLines[oldSuffix] === newLines[newSuffix]
+  ) {
+    oldSuffix--;
+    newSuffix--;
+  }
+
+  const modifiedLines: number[] = [];
+  for (let i = prefix; i <= newSuffix; i++) {
+    modifiedLines.push(i + 1); // 1-based line number
+  }
+
+  // If a line was deleted (e.g., redundant package or unused import), newSuffix < prefix
+  if (modifiedLines.length === 0) {
+    // The target is the remaining statement at prefix or immediately before it (e.g. package main)
+    if (prefix > 0 && newLines[prefix - 1]?.trim().length > 0) {
+      modifiedLines.push(prefix);
+    } else if (prefix < newLines.length && newLines[prefix]?.trim().length > 0) {
+      modifiedLines.push(prefix + 1);
+    } else {
+      let found = false;
+      for (let j = Math.max(0, prefix - 1); j < newLines.length; j++) {
+        if (newLines[j].trim().length > 0) {
+          modifiedLines.push(j + 1);
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        modifiedLines.push(Math.min(prefix + 1, Math.max(1, newLines.length)));
+      }
+    }
+  }
+
+  // If the modified line is completely blank, ensure we also include an adjacent line with real code
+  const resultLines: number[] = [];
+  for (const lineNum of modifiedLines) {
+    const text = newLines[lineNum - 1];
+    if (text && text.trim().length > 0) {
+      resultLines.push(lineNum);
+    } else {
+      if (lineNum > 1 && newLines[lineNum - 2]?.trim().length > 0) {
+        resultLines.push(lineNum - 1);
+      } else if (lineNum < newLines.length && newLines[lineNum]?.trim().length > 0) {
+        resultLines.push(lineNum + 1);
+      } else {
+        resultLines.push(lineNum);
+      }
+    }
+  }
+
+  return [...new Set(resultLines)].sort((a, b) => a - b);
 }
 

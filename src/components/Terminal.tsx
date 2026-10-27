@@ -13,7 +13,6 @@ import {
   Maximize2,
   Minimize2,
   Split,
-  Zap,
   Info,
 } from 'lucide-react';
 import { CompileResult, ParsedError } from '../types';
@@ -31,7 +30,7 @@ interface TerminalProps {
   height: number;
   onHeightChange: (newHeight: number) => void;
   activeCode?: string;
-  onApplyFix?: (diag: GoDiagnostic) => void;
+  diagnostics?: GoDiagnostic[];
   isWin98?: boolean;
   isDark?: boolean;
 }
@@ -48,7 +47,7 @@ export const Terminal: React.FC<TerminalProps> = ({
   height,
   onHeightChange,
   activeCode = '',
-  onApplyFix,
+  diagnostics = [],
   isWin98 = false,
   isDark = true,
 }) => {
@@ -250,6 +249,17 @@ export const Terminal: React.FC<TerminalProps> = ({
                 Erreur
               </span>
             )
+          ) : diagnostics && diagnostics.length > 0 ? (
+            <span
+              className={`flex items-center gap-1 text-[11px] font-mono px-2 py-0.5 rounded-md ${
+                isWin98
+                  ? 'text-rose-800 bg-[#fee2e2] border border-rose-600 font-bold'
+                  : 'text-rose-400 bg-rose-950/60 border border-rose-800/60'
+              }`}
+            >
+              <AlertTriangle className="w-3 h-3 text-rose-500" />
+              {diagnostics.length} erreur{diagnostics.length > 1 ? 's' : ''} (log)
+            </span>
           ) : (
             <span className={`text-[11px] font-mono ${isWin98 ? 'text-[#505050]' : 'text-slate-500'}`}>
               Prêt
@@ -394,22 +404,69 @@ export const Terminal: React.FC<TerminalProps> = ({
               </span>
             </div>
           ) : !result ? (
-            <div className="flex flex-col items-center justify-center h-full text-slate-500 gap-2 text-center px-4">
-              <TerminalIcon className="w-7 h-7 text-slate-700" />
-              <p className="text-slate-400 font-medium">Terminal Go en attente d'exécution</p>
-              <p className="text-[11px] text-slate-500 max-w-sm">
-                Appuyez sur <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-sky-400 border border-slate-700 font-semibold">Exécuter ▶</kbd> ou <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-sky-400 border border-slate-700">Ctrl+Enter</kbd> pour compiler et lancer votre code instantanément.
-              </p>
-            </div>
+            diagnostics && diagnostics.length > 0 ? (
+              <div className="space-y-2 font-mono text-xs">
+                <div className="text-slate-400 select-none flex items-center justify-between flex-wrap gap-2 pb-1 border-b border-slate-800">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-emerald-400 font-bold">$</span>
+                    <span>go vet ./...</span>
+                    <span className="text-rose-400 text-[11px] font-sans font-bold">
+                      ({diagnostics.length} erreur{diagnostics.length > 1 ? 's' : ''} détectée{diagnostics.length > 1 ? 's' : ''} avant compilation)
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5 pt-1">
+                  {diagnostics.map((d, idx) => (
+                    <div
+                      key={d.id || idx}
+                      onClick={() => onJumpToError({ line: d.line, column: d.column, message: d.message, raw: d.message })}
+                      className="p-2.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/40 border border-rose-800/60 transition cursor-pointer flex items-start justify-between gap-3 group"
+                      title="Cliquer pour positionner le curseur sur la ligne de l'erreur"
+                    >
+                      <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                        <span className="flex items-center gap-1.5 text-rose-400 font-bold shrink-0">
+                          <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0" />
+                          ./main.go:{d.line}{d.column ? `:${d.column}` : ''}:
+                        </span>
+                        <div className="space-y-0.5">
+                          <span className="text-rose-200 font-medium break-words">
+                            {d.message}
+                          </span>
+                          {d.explanation && (
+                            <div className="text-slate-400 text-[11px] font-sans pt-0.5">
+                              💡 {d.explanation}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-1.5 font-mono text-xs">
+                <div className="text-slate-500 select-none">
+                  <span className="text-emerald-400">$</span> go vet ./...
+                </div>
+                <div className="text-emerald-400 flex items-center gap-1.5 font-medium">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                  <span>Aucune erreur détectée. Prêt pour l'exécution.</span>
+                </div>
+                <p className="text-[11px] text-slate-500 pt-1 font-sans">
+                  Appuyez sur <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-sky-400 border border-slate-700 font-semibold">Exécuter ▶</kbd> ou <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-sky-400 border border-slate-700">Ctrl+Enter</kbd> pour compiler et lancer votre code instantanément.
+                </p>
+              </div>
+            )
           ) : activeTab === 'errors' && hasErrors ? (
             <div className="space-y-3 font-sans">
               <div className="text-rose-400 font-bold mb-1 flex items-center justify-between text-xs">
                 <div className="flex items-center gap-1.5">
                   <AlertTriangle className="w-4 h-4 text-rose-400" />
-                  <span>Erreurs du compilateur Go ({parsedErrors.length})</span>
+                  <span>Rapport d'erreurs du compilateur Go ({parsedErrors.length})</span>
                 </div>
                 <span className="text-[10px] text-slate-400 font-normal">
-                  Corrigez en 1 clic et découvrez la règle
+                  Cliquez sur une ligne pour naviguer dans l'éditeur
                 </span>
               </div>
 
@@ -418,7 +475,7 @@ export const Terminal: React.FC<TerminalProps> = ({
                 return (
                   <div
                     key={idx}
-                    className="p-3 rounded-2xl border text-left bg-slate-900/90 border-rose-800/70 shadow-md space-y-2 text-xs"
+                    className="p-3 rounded-xl border text-left bg-slate-900/90 border-rose-800/70 shadow-md space-y-2 text-xs"
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex items-start gap-2 flex-1 min-w-0">
@@ -428,6 +485,7 @@ export const Terminal: React.FC<TerminalProps> = ({
                             className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-md bg-rose-500/20 text-rose-300 border border-rose-500/40 shrink-0 hover:bg-rose-950 transition flex items-center gap-1 mt-0.5"
                             title="Aller à la ligne dans l'éditeur"
                           >
+                            <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
                             <span>Ligne {err.line}{err.column ? `:${err.column}` : ''}</span>
                             <ExternalLink className="w-2.5 h-2.5" />
                           </button>
@@ -436,17 +494,6 @@ export const Terminal: React.FC<TerminalProps> = ({
                           {err.message}
                         </span>
                       </div>
-
-                      {diag.fix && onApplyFix && (
-                        <button
-                          onClick={() => onApplyFix(diag)}
-                          className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-gradient-to-r from-sky-400 to-[#00ADD8] hover:from-sky-300 hover:to-sky-400 text-slate-950 font-black text-xs shrink-0 transition active:scale-95 shadow-md shadow-sky-500/20"
-                          title={diag.fix.description}
-                        >
-                          <Zap className="w-3.5 h-3.5 fill-slate-950" />
-                          <span>⚡ Corriger en 1 clic</span>
-                        </button>
-                      )}
                     </div>
 
                     {/* Educational Insight Box */}
@@ -500,12 +547,16 @@ export const Terminal: React.FC<TerminalProps> = ({
 
               {/* Compile Errors */}
               {result.errors && (
-                <div className="mt-3 p-2.5 rounded-lg bg-rose-950/50 border border-rose-800/70 text-rose-300 whitespace-pre-wrap">
-                  <div className="flex items-center gap-1.5 font-bold text-rose-200 mb-1">
-                    <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
-                    Erreur de compilation :
+                <div className="mt-3 p-3 rounded-xl bg-rose-950/60 border border-rose-800 text-rose-300">
+                  <div className="flex items-center justify-between gap-2 font-bold text-rose-200 mb-2 flex-wrap">
+                    <div className="flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4 text-rose-400" />
+                      <span>Erreur de compilation Go :</span>
+                    </div>
                   </div>
-                  {result.errors}
+                  <div className="font-mono text-xs whitespace-pre-wrap leading-relaxed">
+                    {result.errors}
+                  </div>
                 </div>
               )}
 

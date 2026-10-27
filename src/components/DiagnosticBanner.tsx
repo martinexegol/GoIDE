@@ -110,25 +110,22 @@ export const DiagnosticBanner: React.FC<DiagnosticBannerProps> = ({
         </div>
 
         {/* Action Controls */}
-        <div className="flex items-center gap-1.5 shrink-0 ml-2">
-          {fixableCount > 0 && (
+        <div className="flex items-center gap-1.5 shrink-0 ml-1">
+          {diagnostics.length > 0 && (
             <button
               onClick={onApplyAllFixes}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition active:scale-95 shadow-md ${
-                hasErrors
-                  ? 'bg-rose-500 text-slate-950 hover:bg-rose-400'
-                  : 'bg-amber-400 text-slate-950 hover:bg-amber-300'
-              }`}
-              title="Appliquer automatiquement toutes les corrections et afficher les leçons"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition active:scale-95 shadow-md bg-amber-400 hover:bg-amber-300 text-slate-950 ring-2 ring-amber-400/50 animate-pulse touch-manipulation"
+              title="Corriger automatiquement les erreurs détectées en 1 clic (le code concerné sera surligné en jaune pendant 120 secondes)"
             >
-              <Zap className="w-3.5 h-3.5 fill-current" />
-              <span>Tout corriger ({fixableCount})</span>
+              <Zap className="w-3.5 h-3.5 fill-slate-950 text-slate-950" />
+              <span className="hidden sm:inline">Corriger {diagnostics.length > 1 ? `les ${diagnostics.length} erreurs` : "l'erreur"}</span>
+              <span className="sm:hidden">Corriger ({diagnostics.length})</span>
             </button>
           )}
 
           <button
             onClick={() => setIsExpanded(!isExpanded)}
-            className="flex items-center gap-1 px-2 py-1 text-xs font-semibold text-slate-200 hover:text-white bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/80 rounded-lg transition"
+            className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-200 hover:text-white bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/80 rounded-lg transition"
             title={isExpanded ? 'Réduire les explications' : 'Afficher les explications pédagogiques'}
           >
             <span>{isExpanded ? 'Masquer' : 'Explications'}</span>
@@ -177,14 +174,23 @@ export const DiagnosticBanner: React.FC<DiagnosticBannerProps> = ({
                   </div>
                 </div>
 
-                {diag.fix && (
+                {diag.fix ? (
                   <button
                     onClick={() => onApplyFix(diag)}
-                    className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-gradient-to-r from-sky-400 to-[#00ADD8] hover:from-sky-300 hover:to-sky-400 text-slate-950 font-black text-xs shrink-0 transition active:scale-95 shadow-md shadow-sky-500/25 ring-1 ring-white/20"
-                    title={`Corriger en 1 clic : ${diag.fix.description}`}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-400 to-yellow-400 hover:from-amber-300 hover:to-yellow-300 text-slate-950 font-black text-xs shrink-0 transition active:scale-95 shadow-md shadow-amber-500/25 ring-1 ring-white/20"
+                    title={`Corriger cette erreur : ${diag.fix.description} (surligné en jaune pendant 120 secondes)`}
                   >
-                    <Zap className="w-3.5 h-3.5 fill-slate-950" />
-                    <span>⚡ Corriger en 1 clic</span>
+                    <Zap className="w-3.5 h-3.5 fill-slate-950 text-slate-950" />
+                    <span>⚡ Corriger</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={onApplyAllFixes}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-400 to-yellow-400 hover:from-amber-300 hover:to-yellow-300 text-slate-950 font-black text-xs shrink-0 transition active:scale-95 shadow-md shadow-amber-500/25 ring-1 ring-white/20"
+                    title="Corriger automatiquement cette erreur avec l'IDE (surligné en jaune pendant 120 secondes)"
+                  >
+                    <Zap className="w-3.5 h-3.5 fill-slate-950 text-slate-950" />
+                    <span>⚡ Corriger</span>
                   </button>
                 )}
               </div>

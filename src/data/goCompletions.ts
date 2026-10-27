@@ -14,6 +14,8 @@ export interface GoSnippetDef {
 export const GO_KEYWORDS: GoSnippetDef[] = [
   { label: 'package', detail: 'keyword', info: 'Déclare le package du fichier Go (ex: package main)', type: 'keyword', template: 'package ${1:main}\n\n' },
   { label: 'import', detail: 'keyword', info: 'Importe des packages de la bibliothèque standard ou externes', type: 'keyword', template: 'import (\n\t"${1:fmt}"\n)\n' },
+  { label: 'func main()', detail: 'point d\'entrée principal', info: 'Déclare la fonction principale main() sans argument ni retour, point d\'entrée universel en Go', type: 'function', template: 'func main() {\n\t${0}\n}', boost: 25, keywords: ['func', 'main', 'principale'] },
+  { label: 'main', detail: 'func main() { ... }', info: 'Génère la fonction principale main() sans argument ni retour.', type: 'function', template: 'func main() {\n\t${0}\n}', boost: 24, keywords: ['func', 'main'] },
   { label: 'func', detail: 'keyword', info: 'Déclare une fonction ou une méthode avec signature typée', type: 'keyword', template: 'func ${1:name}(${2}) ${3} {\n\t${0}\n}' },
   { label: 'return', detail: 'keyword', info: 'Retourne une ou plusieurs valeurs typées', type: 'keyword', template: 'return ${0}' },
   { label: 'type', detail: 'keyword', info: 'Définit un nouveau type (struct, interface, alias ou type générique)', type: 'keyword', template: 'type ${1:Name} ${2:struct} {\n\t${0}\n}' },
@@ -903,7 +905,7 @@ export function buildCompletionsList(): Completion[] {
       detail: item.detail,
       info: item.info,
       type: item.type,
-      boost: item.boost ?? 22,
+      boost: 8,
       apply: item.template ? snippet(item.template) : item.label,
     });
   }
