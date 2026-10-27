@@ -441,6 +441,10 @@ export default function App() {
     editorRef.current?.insertSnippet(snippetText);
   }, []);
 
+  const handleOpenCompletions = useCallback(() => {
+    editorRef.current?.openCompletions();
+  }, []);
+
   // Jump to error line
   const handleJumpToError = useCallback((error: ParsedError) => {
     setHighlightedError(error);
@@ -790,6 +794,7 @@ export default function App() {
         {/* Android Mobile Touch Accessory Toolbar */}
         <MobileAccessoryBar
           onInsert={handleInsertSnippet}
+          onOpenCompletions={handleOpenCompletions}
         />
 
         {/* Integrated Resizable Terminal / Log where errors appear before and after compile */}

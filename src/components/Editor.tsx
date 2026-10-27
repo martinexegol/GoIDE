@@ -13,14 +13,15 @@ import {
   closeCompletion,
   startCompletion,
   selectedCompletion,
+  completionStatus,
   currentCompletions,
   setSelectedCompletion,
   CompletionContext,
   Completion,
   snippet,
 } from '@codemirror/autocomplete';
-import { keymap, EditorView, gutter, GutterMarker } from '@codemirror/view';
-import { Prec, Extension, StateEffect, StateField } from '@codemirror/state';
+import { keymap, EditorView, gutter, GutterMarker, ViewPlugin, ViewUpdate } from '@codemirror/view';
+import { Prec, Extension, StateEffect, StateField, EditorState } from '@codemirror/state';
 import { indentationMarkers } from '@replit/codemirror-indentation-markers';
 import {
   buildCompletionsList,
@@ -112,7 +113,69 @@ export interface EditorHandle {
   applyFix: (fixFn: (code: string) => string) => void;
   format: () => void;
   focus: () => void;
+  openCompletions: () => void;
 }
+
+/**
+ * 40-second retention plugin for autocomplete:
+ * Keeps the completion menu active for 40 seconds in the absence of user action.
+ * Resets the 40s inactivity window on each user interaction/transaction.
+ */
+const AUTO_CLOSE_COMPLETION_DELAY_MS = 40_000; // 40 seconds
+
+const completion40sTimeoutPlugin = ViewPlugin.fromClass(
+  class {
+    timeoutId: ReturnType<typeof setTimeout> | null = null;
+    view: EditorView;
+
+    constructor(view: EditorView) {
+      this.view = view;
+      this.syncTimer(view.state);
+    }
+
+    update(update: ViewUpdate) {
+      const status = completionStatus(update.state);
+      if (status === 'active') {
+        // Doc changed, selection changed, or became active: reset the 40s inactivity timer
+        this.resetTimer();
+      } else {
+        this.clearTimer();
+      }
+    }
+
+    syncTimer(state: EditorState) {
+      if (completionStatus(state) === 'active') {
+        this.resetTimer();
+      } else {
+        this.clearTimer();
+      }
+    }
+
+    resetTimer() {
+      this.clearTimer();
+      this.timeoutId = setTimeout(() => {
+        try {
+          if (completionStatus(this.view.state) === 'active') {
+            closeCompletion(this.view);
+          }
+        } catch {
+          // view might have unmounted
+        }
+      }, AUTO_CLOSE_COMPLETION_DELAY_MS);
+    }
+
+    clearTimer() {
+      if (this.timeoutId !== null) {
+        clearTimeout(this.timeoutId);
+        this.timeoutId = null;
+      }
+    }
+
+    destroy() {
+      this.clearTimer();
+    }
+  }
+);
 
 interface EditorProps {
   value: string;
@@ -285,6 +348,13 @@ export const Editor = React.memo(forwardRef<EditorHandle, EditorProps>(({
     focus: () => {
       cmRef.current?.view?.focus();
     },
+
+    openCompletions: () => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      view.focus();
+      startCompletion(view);
+    },
   }));
 
   const onRunRef = useRef(onRun);
@@ -346,6 +416,7 @@ export const Editor = React.memo(forwardRef<EditorHandle, EditorProps>(({
               },
             },
           ],
+          validFor: /^\w*$/,
         };
       }
 
@@ -656,6 +727,20 @@ export const Editor = React.memo(forwardRef<EditorHandle, EditorProps>(({
         maxWidth: 'min(520px, calc(100vw - 24px))',
         zIndex: '150 !important',
       },
+      '.cm-tooltip-autocomplete::before': {
+        content: '"⏱ Suggestions Go (actif 40s sans action)"',
+        display: 'block',
+        fontSize: '10px',
+        fontWeight: '700',
+        color: isDark ? '#38bdf8' : '#0284c7',
+        backgroundColor: isDark ? 'rgba(56, 189, 248, 0.12)' : '#e0f2fe',
+        padding: '3px 8px',
+        borderRadius: '6px',
+        marginBottom: '6px',
+        letterSpacing: '0.02em',
+        textAlign: 'center',
+        border: isDark ? '1px solid rgba(56, 189, 248, 0.2)' : '1px solid #bae6fd',
+      },
       '.cm-tooltip-autocomplete ul': {
         fontFamily: "'Fira Code', monospace",
         maxHeight: '260px',
@@ -730,12 +815,14 @@ export const Editor = React.memo(forwardRef<EditorHandle, EditorProps>(({
       errorLinesField,
       errorDotGutter,
       customKeymap,
+      completion40sTimeoutPlugin,
       autocompletion({
         override: [goCompletionSource],
         activateOnTyping: true,
         selectOnOpen: false,
         maxRenderedOptions: 30,
         defaultKeymap: false,
+        closeOnBlur: false,
       }),
       EditorView.lineWrapping,
     ];

@@ -8,6 +8,7 @@ interface MobileAccessoryBarProps {
 
 export const MobileAccessoryBar: React.FC<MobileAccessoryBarProps> = ({
   onInsert,
+  onOpenCompletions,
 }) => {
   const quickKeys = [
     { label: 'Tab', value: '\t', icon: ArrowRightToLine, highlight: true },
@@ -40,6 +41,25 @@ export const MobileAccessoryBar: React.FC<MobileAccessoryBarProps> = ({
         <span className="text-[10px] font-mono font-bold tracking-wider text-sky-400 bg-sky-950/80 px-1.5 py-0.5 rounded border border-sky-800/50 flex items-center gap-1">
           <Sparkles className="w-2.5 h-2.5" /> GO 1.23
         </span>
+
+        {onOpenCompletions && (
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onOpenCompletions();
+            }}
+            onTouchStart={(e) => {
+              e.preventDefault();
+              onOpenCompletions();
+            }}
+            title="Ouvrir le menu d'auto-complétion (reste affiché 40s)"
+            className="h-7 px-2.5 rounded-md font-mono text-xs font-semibold flex items-center justify-center gap-1 shrink-0 transition active:scale-95 touch-manipulation bg-cyan-500/20 text-cyan-300 border border-cyan-500/50 hover:bg-cyan-500/30 shadow-sm"
+          >
+            <Sparkles className="w-3 h-3 text-cyan-300" />
+            <span>Compléter (40s)</span>
+          </button>
+        )}
 
         {quickKeys.map((item) => (
           <button
